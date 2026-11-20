@@ -141,6 +141,20 @@ def real_mode(exe: Path, work: Path) -> str:
 
 
 # 3. 업데이트 ----------------------------------------------------------------------
+def diagnose(port: int) -> None:
+    """이전 버전이 끝나지 않을 때 원인을 찾기 위한 정보."""
+    print("---- 진단: 실행 중인 JeongsiBroadcast 프로세스 ----", flush=True)
+    ps = (
+        "Get-CimInstance Win32_Process -Filter \"Name='JeongsiBroadcast.exe'\" | "
+        "Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | Format-List | Out-String -Width 400"
+    )
+    print(subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True).stdout, flush=True)
+    try:
+        print("새 버전 응답:", ping(port), flush=True)
+    except OSError as exc:
+        print("새 버전 응답 없음:", repr(exc), flush=True)
+
+
 class FeedHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -177,7 +191,11 @@ def update_flow(exe: Path, work: Path) -> str:
         status = call(port, "POST", "/api/update/check")
         assert status.get("release", {}).get("version") == "99.0.0", status
         call(port, "POST", "/api/update/apply")
-        proc.wait(90)  # 이전 버전이 스스로 끝나야 한다
+        try:
+            proc.wait(90)  # 이전 버전이 스스로 끝나야 한다
+        except subprocess.TimeoutExpired:
+            diagnose(port)
+            raise
         wait_for(lambda: ping(port), timeout=120)  # 새 버전이 같은 포트로 다시 뜬다
         old = install / "JeongsiBroadcast.old.exe"
         wait_for(lambda: not old.exists(), timeout=60)

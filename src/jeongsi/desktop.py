@@ -52,6 +52,7 @@ class DesktopShell:
 
     def request_exit(self) -> None:
         """업데이트 등으로 앱을 끝낸다. 창이 초기화 중이라 닫히지 않아도 정해진 시간 안에 반드시 끝낸다."""
+        log.info("종료 요청을 받았습니다(업데이트 등)")
         threading.Thread(target=self._exit_watchdog, name="exit-watchdog", daemon=True).start()
         self.quit()
 
@@ -184,5 +185,6 @@ def run_desktop(args, data_dir: Path) -> int:
         server.should_exit = True
         server_thread.join(5)
         # 트레이·WinRT 같은 백그라운드 스레드가 남아 프로세스가 끝나지 않는 일을 막는다(업데이트 교체에 필요)
+        log.info("정리를 마치고 프로세스를 끝냅니다(pid %s)", os.getpid())
         logging.shutdown()
         os._exit(0)
