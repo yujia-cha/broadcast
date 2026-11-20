@@ -70,6 +70,7 @@ def build_week(
                     program_id=occ.program_id,
                     program_name=occ_program.name if occ_program else "",
                     summary=occ_program.summary() if occ_program else "",
+                    strip=[{"kind": st.kind, "repeat": st.repeat} for st in occ_program.steps] if occ_program else [],
                     status=_cell_status(occ, now, live, next_key),
                 )
             cells.append(cell)
@@ -111,7 +112,7 @@ def describe_next(config: Config, now: datetime, file_seconds: Callable[[str], f
         "program_id": program.id,
         "summary": program.summary(),
         "seconds": round(estimate_program_seconds(program, file_seconds)),
-        "units": [{"label": u.label, "seconds": round(u.seconds, 1)} for u in units],
+        "units": [{"label": u.label, "kind": u.step.kind, "seconds": round(u.seconds, 1)} for u in units],
         "in_seconds": int((occ.at - now).total_seconds()),
         "changed": occ.changed,
     }

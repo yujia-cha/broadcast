@@ -1,26 +1,40 @@
-// 시간표 화면: 회차(행) × 요일(열) 표, 오른쪽에 지금 패널과 선택한 칸 패널
+// 시간표: 요일 열에 시각 위치로 방송 블록을 놓는다.
+// 블록을 위아래로 끌면 그 날만 시각이 바뀌고, 누르면 아이콘 버튼이 나온다. 요일 머리를 누르면 그 날을 쉰다.
 import { del, get, post, put } from "../api.js";
 import {
-  WEEKDAYS, addDays, confirmDialog, fmtClock, fmtDate, fmtDuration, fmtIn, fmtMonthDay, fmtWeekTitle,
-  h, icon, openDialog, stepBar, toast, toastError, weekdaySummary,
+  addDays, confirmDialog, fmtClock, fmtDate, fmtDuration, fmtIn, fmtMonthDay, fmtWeekTitle, h, icon, openDialog, toast, toastError,
 } from "../ui.js";
+import {
+  closePopover, dayRuler, iconAction, popover, rangeCalendar, strip, timePicker, toHHMM, toMinutes, weekdayPicker,
+} from "../visual.js";
 
-let ctx, root, mainEl, nowEl, selEl;
-const st = { start: null, week: null, selected: null, lastSkip: null, weekKey: "", loadToken: 0 };
+const SNAP = 5;
+const MIN_HOUR_PX = 28;
+const MAX_HOUR_PX = 64;
+const BLOCK_PX = 46;
+const blockPx = () => Math.max(26, Math.min(BLOCK_PX, st.hourPx - 4)); // 간격이 좁으면 블록도 낮춘다
+
+let ctx, root, mainEl, nowEl;
+const st = { start: null, week: null, lastSkip: null, weekKey: "", loadToken: 0, dragging: false, hourPx: 56 };
+let resizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (root && st.week && !st.dragging) renderGrid(); }, 150);
+});
 
 export function mount(el, appCtx) {
   ctx = appCtx;
   root = el;
-  mainEl = h("section", { "aria-label": "주간 시간표" }, h("div", { class: "skel" }));
+  mainEl = h("section", { class: "cal-wrap", "aria-label": "주간 시간표" }, h("div", { class: "skel" }));
   nowEl = h("div");
-  selEl = h("div");
-  el.replaceChildren(h("div", { class: "tt-page" }, mainEl, h("aside", { class: "rail", "aria-label": "지금" }, nowEl, selEl)));
+  el.replaceChildren(h("div", { class: "tt-page" }, mainEl, h("aside", { class: "rail", "aria-label": "지금" }, nowEl)));
   st.weekKey = weekKey(ctx.status);
   loadWeek();
   renderNow();
 }
 
 export function unmount() {
+  closePopover();
   root = null;
 }
 
@@ -28,7 +42,7 @@ export function onStatus(status) {
   if (!root) return;
   renderNow();
   const key = weekKey(status);
-  if (key !== st.weekKey) {
+  if (key !== st.weekKey && !st.dragging) {
     st.weekKey = key;
     loadWeek();
   }
@@ -45,141 +59,246 @@ async function loadWeek() {
   const token = ++st.loadToken;
   try {
     const week = await get(`/api/week${st.start ? `?start=${st.start}` : ""}`);
-    if (token !== st.loadToken || !root) return;
+    if (token !== st.loadToken || !root || st.dragging) return;
     st.week = week;
     st.start = week.start;
+    ctx.weekSlots = week.rows.map((r) => r.slot);
     renderGrid();
-    renderSel();
+    renderNow();
   } catch (err) {
     if (!root) return;
-    mainEl.replaceChildren(
-      h("div", { class: "card empty" },
-        h("h3", null, "시간표를 불러오지 못했습니다"),
-        h("p", null, err.message),
-        h("button", { class: "btn", on: { click: loadWeek } }, "다시 시도"),
-      ),
-    );
+    mainEl.replaceChildren(h("div", { class: "card empty" }, h("h3", null, "시간표를 불러오지 못했습니다"), h("p", null, err.message),
+      h("button", { class: "btn", on: { click: loadWeek } }, "다시 시도")));
   }
 }
 
-async function refreshAfterChange(message) {
+async function refresh(message) {
+  closePopover();
   if (message) toast(message);
   await loadWeek();
 }
 
-// 시간표 ------------------------------------------------------------------------
-function isThisWeek() {
-  const today = ctx.status?.now.slice(0, 10);
-  return st.week?.days.some((d) => d.date === today);
+const nowMinutes = () => toMinutes(ctx.status.now.slice(11, 16));
+const todayIso = () => ctx.status.now.slice(0, 10);
+
+// 달력 -------------------------------------------------------------------------
+function hourRange(rows) {
+  const mins = [nowMinutes(), ...rows.flatMap((r) => r.cells.filter((c) => c.time).map((c) => toMinutes(c.time)))];
+  let from = Math.min(8 * 60, ...mins.map((m) => Math.floor(m / 60) * 60 - 60));
+  let to = Math.max(17 * 60, ...mins.map((m) => Math.ceil(m / 60) * 60 + 60));
+  from = Math.max(0, from);
+  to = Math.min(24 * 60, to);
+  return { from, to };
 }
 
 function renderGrid() {
   const w = st.week;
-  const first = w.days[0].date;
-  const last = w.days.at(-1).date;
+  const isThisWeek = w.days.some((d) => d.date === todayIso());
   const bar = h("div", { class: "weekbar" },
     h("button", { class: "ibtn", "aria-label": "지난주", on: { click: () => changeWeek(-7) } }, icon("left")),
     h("button", { class: "ibtn", "aria-label": "다음 주", on: { click: () => changeWeek(7) } }, icon("right")),
-    h("h2", null, fmtWeekTitle(first, last)),
-    h("button", { class: "btn sm", disabled: isThisWeek(), on: { click: () => { st.start = null; loadWeek(); } } }, "이번 주"),
+    h("h2", null, fmtWeekTitle(w.days[0].date, w.days.at(-1).date)),
+    isThisWeek ? null : h("button", { class: "btn sm", on: { click: () => { st.start = null; loadWeek(); } } }, "이번 주"),
+    h("span", { class: "grow" }),
     h("button", { class: "btn sm ghost", on: { click: () => openDaysOffDialog() } }, icon("calendarOff"), "쉬는 날"),
-    h("div", { class: "legend", "aria-hidden": "true" },
-      h("span", null, h("i", { class: "lg-chg" }), "이 날만 변경"),
-      h("span", null, h("i", { class: "lg-off" }), "쉼"),
-    ),
   );
 
   if (!w.rows.length) {
-    const noPrograms = !ctx.programs.length;
     mainEl.replaceChildren(bar,
-      h("div", { class: "card empty" },
-        h("h3", null, "아직 회차가 없습니다"),
-
-        h("button", { class: "btn pri", on: { click: () => ctx.go("new") } }, icon("plus"), "새 방송 만들기"),
-      ),
-    );
+      h("button", { class: "cal-empty", on: { click: () => ctx.go("new") } },
+        h("span", { class: "cal-empty-art", "aria-hidden": "true" },
+          ...[0, 1, 2, 3, 4].map((i) => h("i", null, i === 2 ? h("b", null, icon("plus")) : null))),
+        h("span", { class: "cal-empty-l" }, icon("plus"), "새 방송 만들기"),
+      ));
     return;
   }
 
-  const grid = h("div", { class: "tt", role: "grid", "aria-label": "주간 시간표", style: { gridTemplateColumns: `120px repeat(${w.days.length}, minmax(0, 1fr))` } });
-  grid.append(h("div", { class: "corner" }));
-  for (const day of w.days) {
-    const sel = st.selected?.type === "day" && st.selected.date === day.date;
-    grid.append(
+  const { from, to } = hourRange(w.rows);
+  // 화면 높이에 맞춰 시간 간격을 정해 하루가 한 화면에 들어오게 한다
+  const avail = Math.max(320, window.innerHeight - (mainEl.getBoundingClientRect().top || 56) - 150);
+  st.hourPx = Math.max(MIN_HOUR_PX, Math.min(MAX_HOUR_PX, Math.floor(avail / ((to - from) / 60))));
+  const HOUR_PX = st.hourPx;
+  const height = ((to - from) / 60) * HOUR_PX + BLOCK_PX / 2; // 마지막 블록이 잘리지 않게
+  const cols = `52px repeat(${w.days.length}, minmax(0, 1fr))`;
+  const head = h("div", { class: "cal-head", style: { gridTemplateColumns: cols } }, h("span"),
+    w.days.map((day) =>
       h("button", {
-        class: `dayhd${day.is_today ? " today" : ""}${sel ? " sel" : ""}`,
+        class: `cal-day${day.is_today ? " today" : ""}${day.day_off ? " off" : ""}`,
         "aria-label": `${fmtDate(day.date)}${day.day_off ? ", 쉬는 날" : ""}`,
-        on: { click: () => select({ type: "day", date: day.date }) },
+        on: { click: (e) => dayPopover(e.currentTarget, day) },
       },
         h("b", null, day.label),
-        h("small", null, `${fmtMonthDay(day.date)}${day.is_today ? " 오늘" : ""}${day.day_off ? ` · 쉼${day.day_off.memo ? ` ${day.day_off.memo}` : ""}` : ""}`),
-      ),
-    );
-  }
-  for (const row of w.rows) {
-    const slot = row.slot;
-    grid.append(
-      h("div", { class: `rowhd${slot.enabled ? "" : " disabled"}` },
-        h("b", null, slot.name),
-        h("span", null, `${slot.time} · ${weekdaySummary(slot.weekdays)}${periodText(slot)}${slot.enabled ? "" : " · 꺼짐"}`),
-        h("button", { class: "link", on: { click: () => openSlotDialog(slot) } }, "매주 일정 편집"),
-      ),
-    );
-    row.cells.forEach((cell, i) => grid.append(renderCell(row, cell, w.days[i])));
-  }
-  grid.append(h("div", { class: "addrow" }, h("button", { class: "link", on: { click: () => openSlotDialog(null) } }, icon("plus"), " 회차 추가")));
-  mainEl.replaceChildren(bar, grid);
+        h("span", null, fmtMonthDay(day.date)),
+        day.day_off ? h("i", { class: "cal-day-off" }, icon("ban")) : null,
+      )));
+
+  const axis = h("div", { class: "cal-axis", style: { height: `${height}px` } },
+    Array.from({ length: (to - from) / 60 + 1 }, (_, i) =>
+      h("span", { style: { top: `${i * HOUR_PX}px` } }, `${String(from / 60 + i).padStart(2, "0")}:00`)));
+
+  const columns = w.days.map((day, di) => {
+    const col = h("div", { class: `cal-col${day.is_today ? " today" : ""}${day.day_off ? " off" : ""}`, style: { height: `${height}px` } });
+    for (let i = 0; i <= (to - from) / 60; i++) col.append(h("i", { class: "cal-line", style: { top: `${i * HOUR_PX}px` } }));
+    const groups = new Map();
+    for (const row of w.rows) {
+      const cell = row.cells[di];
+      if (cell.status === "none") continue;
+      groups.set(cell.time, [...(groups.get(cell.time) || []), { row, cell }]);
+    }
+    for (const items of groups.values()) {
+      items.forEach((item, i) => col.append(block(item.row, item.cell, from, i, items.length)));
+    }
+    if (day.is_today && nowMinutes() >= from && nowMinutes() <= to) {
+      col.append(h("i", { class: "cal-now", style: { top: `${((nowMinutes() - from) / 60) * HOUR_PX}px` } }));
+    }
+    return col;
+  });
+
+  const body = h("div", { class: "cal-body", style: { gridTemplateColumns: cols } }, axis, columns);
+  mainEl.replaceChildren(bar, h("div", { class: "cal" }, head, body));
 }
 
-const STATUS_LABEL = { past: "지남", off: "쉼", next: "다음", live: "방송 중", scheduled: "예정" };
-
-function renderCell(row, cell, day) {
-  const today = day.is_today ? " today" : "";
-  if (cell.status === "none") return h("div", { class: `cell none${today}` });
-  const sel = st.selected?.type === "cell" && st.selected.date === cell.date && st.selected.slot_id === row.slot.id;
-  const changed = cell.changed && cell.status !== "off";
-  const cls = `cell ${cell.status}${changed ? " chg" : ""}${today}${sel ? " sel" : ""}`;
-
-  let detail = cell.summary;
-  if (cell.status === "off") detail = cell.override?.action === "skip" ? "이 날만 쉼" : `쉬는 날${day.day_off?.memo ? ` · ${day.day_off.memo}` : ""}`;
-  else if (cell.status === "live") detail = liveProgress();
-  else if (changed) {
-    const parts = ["이 날만 변경"];
-    if (cell.time !== cell.original_time) parts.push(`원래 ${cell.original_time}`);
-    if (cell.program_id !== row.slot.program_id) parts.push(cell.program_name);
-    detail = parts.join(" · ");
-  }
-
-  const label = h("span", { class: "st" },
-    cell.status === "live" ? h("span", { class: "dot" }) : null,
-    STATUS_LABEL[cell.status],
-  );
-  return h("div", { class: cls, role: "gridcell" },
-    h("button", {
-      "aria-label": `${fmtDate(cell.date)} ${row.slot.name} ${cell.time}, ${STATUS_LABEL[cell.status]}`,
-      "aria-pressed": sel ? "true" : "false",
-      on: { click: () => select({ type: "cell", date: cell.date, slot_id: row.slot.id }) },
-    },
-      h("span", { class: "l1" },
-        h("span", { class: "t" }, cell.time),
-        label,
-      ),
-      h("span", { class: "p" }, detail),
+function block(row, cell, from, index, count) {
+  const bh = blockPx();
+  const top = ((toMinutes(cell.time) - from) / 60) * st.hourPx - bh / 2;
+  const el = h("button", {
+    class: `cblock ${cell.status}${cell.changed && cell.status !== "off" ? " chg" : ""}${bh < 40 ? " compact" : ""}`,
+    style: { top: `${top}px`, height: `${bh}px`, left: `calc(${(index * 100) / count}% + 3px)`, width: `calc(${100 / count}% - 6px)` },
+    "aria-label": `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}`,
+  },
+    h("span", { class: "cb-top" },
+      h("b", { class: "cb-time" }, cell.time),
+      cell.status === "off" ? icon("ban") : cell.status === "live" ? h("span", { class: "dot" }) : null,
     ),
+    h("span", { class: "cb-name" }, row.slot.name),
+    strip(cell.strip || [], { size: "xs" }),
   );
+  if (["scheduled", "next"].includes(cell.status)) enableDrag(el, row, cell, from);
+  else el.addEventListener("click", () => blockPopover(el, row, cell));
+  return el;
 }
 
-function periodText(slot) {
-  if (slot.start_date && slot.end_date) return ` · ${fmtMonthDay(slot.start_date)}~${fmtMonthDay(slot.end_date)}`;
-  if (slot.start_date) return ` · ${fmtMonthDay(slot.start_date)}부터`;
-  if (slot.end_date) return ` · ${fmtMonthDay(slot.end_date)}까지`;
-  return "";
+// 끌어서 그 날 시각 바꾸기 ---------------------------------------------------------------
+function enableDrag(el, row, cell) {
+  const startMin = toMinutes(cell.time);
+  let startY = 0, moved = false, current = startMin, label;
+  el.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    startY = e.clientY;
+    moved = false;
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (!el.hasPointerCapture(e.pointerId)) return;
+    const dy = e.clientY - startY;
+    if (!moved && Math.abs(dy) < 4) return;
+    if (!moved) {
+      moved = true;
+      st.dragging = true;
+      closePopover();
+      el.classList.add("dragging");
+      label = h("span", { class: "cb-drag-time" });
+      el.append(label);
+    }
+    current = Math.round((startMin + (dy / st.hourPx) * 60) / SNAP) * SNAP;
+    current = Math.max(0, Math.min(23 * 60 + 55, current));
+    el.style.transform = `translateY(${((current - startMin) / 60) * st.hourPx}px)`;
+    label.textContent = toHHMM(current);
+  });
+  el.addEventListener("pointerup", async (e) => {
+    if (!el.hasPointerCapture(e.pointerId)) return;
+    el.releasePointerCapture(e.pointerId);
+    if (!moved) return blockPopover(el, row, cell);
+    st.dragging = false;
+    if (current === startMin) return renderGrid();
+    await moveTime(row, cell, toHHMM(current));
+  });
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); blockPopover(el, row, cell); }
+  });
 }
 
-function liveProgress() {
-  const r = ctx.status?.runner;
-  if (!r?.plays) return "";
-  return `${r.index + 1}/${r.plays.length}단계 · ${r.plays[r.index]?.label ?? ""}`;
+async function moveTime(row, cell, hhmm) {
+  try {
+    if (hhmm === cell.original_time && cell.program_id === row.slot.program_id) {
+      if (cell.override) await del(`/api/overrides/${cell.date}/${row.slot.id}`);
+    } else {
+      await put("/api/overrides", { date: cell.date, slot_id: row.slot.id, action: "change", time: hhmm, program_id: cell.program_id });
+    }
+    await refresh(`${fmtDate(cell.date)} ${row.slot.name} → ${hhmm}`);
+  } catch (err) {
+    toastError(err);
+    renderGrid();
+  }
+}
+
+// 블록 팝오버 -------------------------------------------------------------------
+function blockPopover(anchor, row, cell) {
+  const past = ["past", "live"].includes(cell.status);
+  const offByOverride = cell.status === "off" && cell.override?.action === "skip";
+  const offByDay = cell.status === "off" && !cell.override;
+  const program = ctx.programs.find((p) => p.id === cell.program_id);
+  const actions = [];
+  if (program) actions.push(iconAction("play", "지금", () => broadcastNow(program.id)));
+  if (!past) {
+    if (offByOverride) actions.push(iconAction("undo", "되살리기", () => clearOverride(row, cell, "다시 방송합니다.")));
+    else if (offByDay) actions.push(iconAction("check", "이 회차만", () => setOverride(row, cell, { action: "change", time: cell.time }, "이 회차만 방송합니다.")));
+    else actions.push(iconAction("ban", "이 날 쉬기", () => setOverride(row, cell, { action: "skip" }, `${fmtDate(cell.date)} 쉽니다.`)));
+    if (!offByOverride) actions.push(iconAction("clock", "시각", () => timeEditor(anchor, row, cell)));
+    if (cell.changed) actions.push(iconAction("undo", "원래대로", () => clearOverride(row, cell, "원래대로 돌렸습니다.")));
+  }
+  actions.push(iconAction("edit", "매주", () => { closePopover(); openSlotDialog(row.slot); }));
+  popover(anchor,
+    h("div", { class: "pop-in" },
+      h("div", { class: "pop-head" }, h("b", null, cell.time), h("span", null, row.slot.name), h("small", null, fmtDate(cell.date))),
+      strip(cell.strip || [], { size: "sm" }),
+      h("div", { class: "ia-row" }, actions),
+    ));
+}
+
+function timeEditor(anchor, row, cell) {
+  let value = cell.time;
+  popover(anchor,
+    h("div", { class: "pop-in" },
+      h("div", { class: "pop-head" }, h("span", null, row.slot.name), h("small", null, fmtDate(cell.date))),
+      timePicker(value, (v) => (value = v)),
+      h("div", { class: "ia-row" }, h("button", { class: "btn pri", on: { click: () => moveTime(row, cell, value) } }, icon("check"), "적용")),
+    ));
+}
+
+async function setOverride(row, cell, change, message) {
+  try {
+    await put("/api/overrides", { date: cell.date, slot_id: row.slot.id, ...change });
+    await refresh(message);
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+async function clearOverride(row, cell, message) {
+  try {
+    await del(`/api/overrides/${cell.date}/${row.slot.id}`);
+    await refresh(message);
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+// 요일 머리 팝오버: 이 날 쉬기 -------------------------------------------------------------
+function dayPopover(anchor, day) {
+  const off = day.day_off;
+  const actions = off
+    ? [iconAction("undo", off.start !== off.end ? "기간 해제" : "쉬기 해제", async () => {
+        if (off.start !== off.end && !(await confirmDialog({ title: "쉬는 기간 해제", message: `${fmtDate(off.start)} ~ ${fmtDate(off.end)}`, confirm: "해제" }))) return;
+        try { await del(`/api/days-off/${off.id}`); await refresh("쉬는 날을 해제했습니다."); } catch (err) { toastError(err); }
+      })]
+    : [iconAction("ban", "이 날 쉬기", async () => {
+        try { await post("/api/days-off", { start: day.date, end: day.date, memo: "" }); await refresh(`${fmtDate(day.date)} 쉽니다.`); } catch (err) { toastError(err); }
+      })];
+  actions.push(iconAction("calendarOff", "여러 날", () => { closePopover(); openDaysOffDialog(day.date); }));
+  popover(anchor, h("div", { class: "pop-in" },
+    h("div", { class: "pop-head" }, h("b", null, fmtDate(day.date)), off?.memo ? h("small", null, off.memo) : null),
+    h("div", { class: "ia-row" }, actions)));
 }
 
 function changeWeek(days) {
@@ -187,33 +306,22 @@ function changeWeek(days) {
   loadWeek();
 }
 
-function select(sel) {
-  st.selected = sel;
-  renderGrid();
-  renderSel();
-}
-
 // 지금 패널 ---------------------------------------------------------------------
 function renderNow() {
   const status = ctx.status;
   if (!status || !nowEl) return;
   const focusKey = nowEl.contains(document.activeElement) ? document.activeElement.dataset.focus : null;
-  paintNow(status);
+  const r = status.runner;
+  if (r.state !== "idle" && r.kind !== "preview") nowEl.replaceChildren(liveCard(r));
+  else if (r.state !== "idle") nowEl.replaceChildren(h("section", { class: "card" }, h("div", { class: "ck" }, h("span", { class: "liv" }, icon("volume"), "미리듣기")),
+    h("div", { class: "ia-row" }, tag(iconAction("stop", "정지", () => post("/api/broadcast/stop", { kind: "preview" }).catch(toastError)), "stop-preview"))));
+  else nowEl.replaceChildren(nextCard(status));
   if (focusKey) nowEl.querySelector(`[data-focus="${focusKey}"]`)?.focus();
 }
 
-function paintNow(status) {
-  const r = status.runner;
-  if (r.state !== "idle" && r.kind !== "preview") return nowEl.replaceChildren(liveCard(r));
-  if (r.state !== "idle" && r.kind === "preview") {
-    return nowEl.replaceChildren(
-      h("section", { class: "card" },
-        h("div", { class: "ck" }, h("span", null, "미리듣기 중")),
-        h("button", { class: "btn", "data-focus": "stop-preview", on: { click: () => post("/api/broadcast/stop", { kind: "preview" }).catch(toastError) } }, icon("stop"), "미리듣기 정지"),
-      ),
-    );
-  }
-  nowEl.replaceChildren(nextCard(status));
+function tag(el, key) {
+  el.dataset.focus = key;
+  return el;
 }
 
 function liveCard(r) {
@@ -222,24 +330,14 @@ function liveCard(r) {
   const cur = plays[r.index];
   const curElapsed = Math.min(r.play_elapsed || 0, cur?.seconds || 0);
   const total = plays.reduce((a, p) => a + p.seconds, 0);
-  const stateText = { preparing: "다른 소리를 멈추는 중", restoring: "원래 소리로 되돌리는 중" }[r.state];
+  const index = r.state === "playing" ? r.index : r.state === "restoring" ? plays.length : -1;
   return h("section", { class: "card liveC", "aria-live": "polite" },
-    h("div", { class: "ck" },
-      h("span", { class: "liv" }, h("span", { class: "dot" }), stateText || "방송 중"),
-      h("span", null, `${fmtClock(before + curElapsed)} / ${fmtClock(total)}`),
-    ),
+    h("div", { class: "ck" }, h("span", { class: "liv" }, h("span", { class: "dot" }), "방송 중"), h("span", null, `${fmtClock(before + curElapsed)} / ${fmtClock(total)}`)),
     h("span", { class: "nm" }, r.name),
-    stepBar(plays, { index: r.state === "playing" ? r.index : r.state === "restoring" ? plays.length : -1, ratio: cur?.seconds ? curElapsed / cur.seconds : 0 }),
-    h("ol", { class: "units" },
-      plays.map((p, i) =>
-        h("li", { class: i < r.index ? "past" : i === r.index && r.state === "playing" ? "cur" : "" },
-          h("span", { class: "n" }, i + 1), h("span", null, p.label), h("span", null, fmtClock(p.seconds)),
-        ),
-      ),
-    ),
-    h("div", { class: "btns" },
-      h("button", { class: "btn", "data-focus": "skip", disabled: r.state !== "playing", on: { click: skipStep } }, icon("skip"), "다음 단계로"),
-      h("button", { class: "btn stop", "data-focus": "stop", disabled: r.state === "restoring", on: { click: stopBroadcast } }, icon("stop"), "방송 끄기"),
+    strip(plays, { size: "lg", index, ratio: cur?.seconds ? curElapsed / cur.seconds : 0, expanded: false }),
+    h("div", { class: "ia-row" },
+      tag(iconAction("skip", "다음", skipStep, { disabled: r.state !== "playing" }), "skip"),
+      tag(iconAction("stop", "끄기", stopBroadcast, { tone: "stop", disabled: r.state === "restoring" }), "stop"),
     ),
   );
 }
@@ -247,37 +345,44 @@ function liveCard(r) {
 function nextCard(status) {
   const n = status.next;
   const skip = st.lastSkip && Date.now() - st.lastSkip.at < 60000 ? st.lastSkip : null;
-  const notice = skip
-    ? h("div", { class: "notice" },
-        h("span", null, `${skip.dateLabel} ${skip.time} ${skip.name}을(를) 껐습니다`),
-        h("button", { class: "link", "data-focus": "undo", on: { click: undoSkip } }, "되돌리기"))
-    : null;
+  const ruler = dayRuler(todayCells().map((c) => c.time), nowMinutes(), n?.date === todayIso() ? n.time : null);
   if (!n) {
-    return h("section", { class: "card" }, notice,
-      h("div", { class: "ck" }, h("span", null, "다음 방송")),
-      h("span", { class: "nm" }, "예정된 방송이 없습니다"),
-      status.auto_broadcast ? null : h("p", { class: "hint" }, "자동 방송이 꺼져 있습니다."),
-    );
+    return h("section", { class: "card" }, ruler,
+      h("div", { class: "next-empty" }, icon(status.auto_broadcast ? "moon" : "ban"), h("span", null, status.auto_broadcast ? "예정 없음" : "자동 방송 꺼짐")),
+      skip ? undoChip(skip) : null);
   }
-  const today = status.now.slice(0, 10);
-  const when = n.date === today ? fmtIn(n.in_seconds) : fmtDate(n.date);
-  return h("section", { class: "card" }, notice,
-    h("div", { class: "ck" }, h("span", null, "다음 방송"), h("span", null, when)),
+  const when = n.date === todayIso() ? fmtIn(n.in_seconds) : fmtDate(n.date);
+  return h("section", { class: "card" },
+    h("div", { class: "ck" }, h("span", null, "다음"), h("span", null, when)),
     h("span", { class: "bigt" }, n.time),
     h("span", { class: "nm" }, n.name),
-    stepBar(n.units, { preview: true }),
-    h("span", { class: "meta" }, `${n.summary} · 약 ${fmtDuration(n.seconds)}`),
-    h("div", { class: "btns" },
-      h("button", { class: "btn pri", "data-focus": "now", on: { click: () => broadcastNow(n) } }, icon("play"), "지금 방송"),
-      h("button", { class: "btn", "data-focus": "skip-next", on: { click: skipNext } }, "이번 방송 끄기"),
+    strip(n.units, { size: "lg", expanded: false }),
+    h("span", { class: "meta" }, `약 ${fmtDuration(n.seconds)}`),
+    ruler,
+    h("div", { class: "ia-row" },
+      tag(iconAction("play", "지금", () => broadcastNow(n.program_id)), "now"),
+      tag(iconAction("ban", "이번 끄기", skipNext), "skip-next"),
     ),
+    skip ? undoChip(skip) : null,
   );
 }
 
-async function broadcastNow(n) {
+function undoChip(skip) {
+  return h("button", { class: "undo-chip", "data-focus": "undo", on: { click: undoSkip } }, icon("undo"), `${skip.time} ${skip.name} 되돌리기`);
+}
+
+function todayCells() {
+  if (!st.week) return [];
+  const i = st.week.days.findIndex((d) => d.date === todayIso());
+  if (i < 0) return [];
+  return st.week.rows.map((r) => r.cells[i]).filter((c) => c.time && c.status !== "off");
+}
+
+async function broadcastNow(programId) {
+  closePopover();
   try {
-    await post("/api/broadcast", { program_id: n.program_id });
-    toast("방송을 시작합니다. 다른 앱 소리를 잠시 멈춥니다.");
+    await post("/api/broadcast", { program_id: programId });
+    toast("방송을 시작합니다.");
   } catch (err) {
     toastError(err);
   }
@@ -286,7 +391,7 @@ async function broadcastNow(n) {
 async function stopBroadcast() {
   try {
     await post("/api/broadcast/stop");
-    toast("방송을 껐습니다. 다른 앱 소리를 원래대로 되돌립니다.");
+    toast("방송을 껐습니다.");
   } catch (err) {
     toastError(err);
   }
@@ -303,8 +408,8 @@ async function skipStep() {
 async function skipNext() {
   try {
     const res = await post("/api/skip-next");
-    st.lastSkip = { ...res, dateLabel: res.date === ctx.status.now.slice(0, 10) ? "오늘" : fmtDate(res.date), at: Date.now() };
-    await refreshAfterChange(`${st.lastSkip.dateLabel} ${res.time} ${res.name}을(를) 껐습니다.`);
+    st.lastSkip = { ...res, at: Date.now() };
+    await refresh(`${res.time} ${res.name} 끔`);
   } catch (err) {
     toastError(err);
   }
@@ -321,237 +426,58 @@ async function undoSkip() {
       await del(`/api/overrides/${s.date}/${s.slot_id}`);
     }
     st.lastSkip = null;
-    await refreshAfterChange("되돌렸습니다.");
+    await refresh("되돌렸습니다.");
   } catch (err) {
     toastError(err);
   }
 }
 
-// 선택한 칸 패널 ------------------------------------------------------------------
-function renderSel() {
-  if (!selEl) return;
-  const sel = st.selected;
-  if (!sel || !st.week) {
-    selEl.replaceChildren(
-      h("section", { class: "card" },
-        h("div", { class: "ck" }, h("span", null, "선택한 칸")),
-        h("p", { class: "hint" }, "칸이나 요일을 누르면 그 날만 쉬거나 바꿀 수 있습니다."),
-      ),
-    );
-    return;
-  }
-  if (sel.type === "day") return selEl.replaceChildren(dayCard(sel));
-  const row = st.week.rows.find((r) => r.slot.id === sel.slot_id);
-  const idx = st.week.days.findIndex((d) => d.date === sel.date);
-  const cell = row?.cells[idx];
-  if (!cell || cell.status === "none") {
-    st.selected = null;
-    return renderSel();
-  }
-  selEl.replaceChildren(cellCard(row, cell, st.week.days[idx]));
-}
-
-function cellCard(row, cell, day) {
-  const title = `${fmtDate(cell.date)} · ${row.slot.name}`;
-  const past = ["past", "live"].includes(cell.status);
-  if (past) {
-    return h("section", { class: "card" },
-      h("div", { class: "ck" }, h("span", null, "선택한 칸")),
-      h("span", { class: "nm", style: { fontSize: "15px" } }, title),
-      h("p", { class: "meta", style: { margin: 0 } }, cell.status === "live" ? "방송 중입니다." : "지난 회차입니다."),
-    );
-  }
-  const ov = cell.override;
-  let mode = ov ? (ov.action === "skip" ? "skip" : "change") : "keep";
-  let timeInput, programSelect, errEl, fieldsEl;
-  const radios = h("div", { class: "radios", role: "radiogroup", "aria-label": "이 날 이 회차" });
-  const options = [["keep", "그대로"], ["skip", "쉬기"], ["change", "바꾸기"]];
-  const paintRadios = () => {
-    radios.replaceChildren(
-      ...options.map(([value, label]) =>
-        h("button", { role: "radio", "aria-checked": String(mode === value), on: { click: () => choose(value) } }, label),
-      ),
-    );
-    fieldsEl.hidden = mode !== "change";
-  };
-  const choose = async (value) => {
-    if (value === "change") {
-      mode = "change";
-      paintRadios();
-      timeInput.focus();
-      return;
-    }
-    try {
-      if (value === "keep") {
-        if (ov) await del(`/api/overrides/${cell.date}/${row.slot.id}`);
-        mode = "keep";
-        await refreshAfterChange("원래 일정대로 방송합니다.");
-      } else {
-        await put("/api/overrides", { date: cell.date, slot_id: row.slot.id, action: "skip" });
-        mode = "skip";
-        await refreshAfterChange(`${fmtDate(cell.date)} ${row.slot.name}을(를) 쉽니다.`);
-      }
-    } catch (err) {
-      toastError(err);
-    }
-  };
-  const saveChange = async () => {
-    errEl.textContent = "";
-    if (!timeInput.value) {
-      errEl.textContent = "시각을 입력하세요.";
-      timeInput.setAttribute("aria-invalid", "true");
-      return;
-    }
-    try {
-      await put("/api/overrides", { date: cell.date, slot_id: row.slot.id, action: "change", time: timeInput.value, program_id: programSelect.value });
-      await refreshAfterChange(`${fmtDate(cell.date)} ${row.slot.name}을(를) ${timeInput.value}에 방송합니다.`);
-    } catch (err) {
-      errEl.textContent = err.message;
-    }
-  };
-  const id = `sel-${cell.date}-${row.slot.id}`;
-  fieldsEl = h("div", { style: { display: "grid", gap: "var(--s3)" } },
-    h("div", { class: "fields" },
-      h("label", { class: "lbl", for: `${id}-time` }, "시각"),
-      (timeInput = h("input", { class: "input", type: "time", id: `${id}-time`, value: ov?.time || cell.time, required: true })),
-      h("label", { class: "lbl", for: `${id}-prog` }, "구성"),
-      (programSelect = h("select", { class: "input", id: `${id}-prog` },
-        ctx.programs.map((p) => h("option", { value: p.id, selected: p.id === (ov?.program_id || cell.program_id) }, p.name)))),
-    ),
-    (errEl = h("p", { class: "err", role: "alert" })),
-    h("button", { class: "btn pri", on: { click: saveChange } }, "이 날짜에 적용"),
-  );
-  paintRadios();
-  return h("section", { class: "card" },
-    h("div", { class: "ck" }, h("span", null, "선택한 칸")),
-    h("span", { class: "nm", style: { fontSize: "15px" } }, title),
-    day.day_off && !ov ? h("p", { class: "hint" }, "쉬는 날입니다. '바꾸기'를 하면 이 회차만 방송합니다.") : null,
-    radios,
-    fieldsEl,
-  );
-}
-
-function dayCard(sel) {
-  const day = st.week.days.find((d) => d.date === sel.date);
-  if (!day) return h("div");
-  const off = day.day_off;
-  if (off) {
-    const range = off.start !== off.end;
-    return h("section", { class: "card" },
-      h("div", { class: "ck" }, h("span", null, "선택한 날")),
-      h("span", { class: "nm", style: { fontSize: "15px" } }, fmtDate(day.date)),
-      h("p", { class: "meta", style: { margin: 0 } },
-        `쉬는 날${off.memo ? ` · ${off.memo}` : ""}${range ? ` (${fmtDate(off.start)} ~ ${fmtDate(off.end)})` : ""}`),
-      h("button", {
-        class: "btn",
-        on: { click: async () => {
-          if (range && !(await confirmDialog({ title: "쉬는 기간 해제", message: `${fmtDate(off.start)} ~ ${fmtDate(off.end)} 기간 전체를 해제합니다.`, confirm: "기간 해제" }))) return;
-          try {
-            await del(`/api/days-off/${off.id}`);
-            await refreshAfterChange("쉬는 날을 해제했습니다.");
-          } catch (err) {
-            toastError(err);
-          }
-        } },
-      }, range ? "기간 전체 해제" : "쉬는 날 해제"),
-    );
-  }
-  let memo;
-  return h("section", { class: "card" },
-    h("div", { class: "ck" }, h("span", null, "선택한 날")),
-    h("span", { class: "nm", style: { fontSize: "15px" } }, fmtDate(day.date)),
-    h("label", { class: "field" }, h("span", null, "메모 (선택)"), (memo = h("input", { class: "input", maxlength: 60, placeholder: "예: 개교기념일" }))),
-    h("button", {
-      class: "btn pri",
-      on: { click: async () => {
-        try {
-          await post("/api/days-off", { start: day.date, end: day.date, memo: memo.value.trim() });
-          await refreshAfterChange(`${fmtDate(day.date)}은(는) 방송하지 않습니다.`);
-        } catch (err) {
-          toastError(err);
-        }
-      } },
-    }, "이 날 쉬기"),
-    h("button", { class: "link", style: { justifySelf: "start" }, on: { click: () => openDaysOffDialog(day.date) } }, "여러 날 쉬기…"),
-  );
-}
-
-// 회차 대화상자 ---------------------------------------------------------------------
-function openSlotDialog(slot) {
-  if (!ctx.programs.length) {
-    toast("먼저 방송 구성을 만드세요.");
-    ctx.go("programs");
-    return;
-  }
-  const isNew = !slot;
-  const draft = slot ? { ...slot, weekdays: [...slot.weekdays] } : { name: "", time: "09:00", weekdays: [0, 1, 2, 3, 4], program_id: ctx.programs[0].id, enabled: true, start_date: null, end_date: null };
-  let nameEl, timeEl, progEl, enabledEl, errEl, dayBox, confirmBox, startEl, endEl;
+// 매주 일정 편집 ----------------------------------------------------------------------
+export function openSlotDialog(slot) {
+  const draft = { ...slot, weekdays: [...slot.weekdays] };
+  let nameEl, progEl, errEl, startEl, endEl, enabledEl, confirmBox;
   let overlapConfirmed = null;
-
-  const paintDays = () =>
-    dayBox.replaceChildren(
-      ...WEEKDAYS.map((label, i) =>
-        h("button", {
-          type: "button",
-          "aria-pressed": String(draft.weekdays.includes(i)),
-          on: { click: () => {
-            draft.weekdays = draft.weekdays.includes(i) ? draft.weekdays.filter((d) => d !== i) : [...draft.weekdays, i];
-            paintDays();
-          } },
-        }, label),
-      ),
-    );
-
-  const { close } = openDialog(isNew ? "회차 추가" : "회차 편집", (close) => {
-    const form = h("form", { class: "dlg", on: { submit: (e) => { e.preventDefault(); save(); } } },
-      h("h2", null, isNew ? "회차 추가" : "매주 일정 편집"),
-      h("label", { class: "field" }, h("span", null, "이름"), (nameEl = h("input", { class: "input", value: draft.name, maxlength: 40, placeholder: "예: 점심 안내", required: true }))),
-      h("label", { class: "field" }, h("span", null, "시각"), (timeEl = h("input", { class: "input", type: "time", value: draft.time, required: true }))),
-      h("div", { class: "field" }, h("span", null, "요일"), (dayBox = h("div", { class: "toggles", role: "group", "aria-label": "요일" }))),
+  const { close } = openDialog("매주 일정", (close) =>
+    h("form", { class: "dlg", on: { submit: (e) => { e.preventDefault(); save(); } } },
+      h("h2", null, "매주 일정"),
+      (nameEl = h("input", { class: "input", value: draft.name, maxlength: 40, "aria-label": "이름", required: true })),
+      timePicker(draft.time, (v) => (draft.time = v)),
+      weekdayPicker(draft.weekdays, (v) => (draft.weekdays = v)),
       h("label", { class: "field" }, h("span", null, "방송 구성"),
-        (progEl = h("select", { class: "input" }, ctx.programs.map((p) => h("option", { value: p.id, selected: p.id === draft.program_id }, `${p.name} · ${p.summary}`))))),
+        (progEl = h("select", { class: "input" }, ctx.programs.map((p) => h("option", { value: p.id, selected: p.id === draft.program_id }, p.name))))),
       h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s3)" } },
-        h("label", { class: "field" }, h("span", null, "시작일 (선택)"), (startEl = h("input", { class: "input", type: "date", value: draft.start_date || "" }))),
-        h("label", { class: "field" }, h("span", null, "종료일 (선택)"), (endEl = h("input", { class: "input", type: "date", value: draft.end_date || "" }))),
+        h("label", { class: "field" }, h("span", null, "시작일"), (startEl = h("input", { class: "input", type: "date", value: draft.start_date || "" }))),
+        h("label", { class: "field" }, h("span", null, "종료일"), (endEl = h("input", { class: "input", type: "date", value: draft.end_date || "" }))),
       ),
       h("label", { style: { display: "flex", gap: "var(--s2)", alignItems: "center" } },
-        (enabledEl = h("input", { type: "checkbox", checked: draft.enabled, style: { width: "18px", height: "18px", accentColor: "var(--accent)" } })),
-        "이 회차 사용"),
+        (enabledEl = h("input", { type: "checkbox", checked: draft.enabled, style: { width: "18px", height: "18px", accentColor: "var(--accent)" } })), "사용"),
       (errEl = h("p", { class: "err", role: "alert" })),
       (confirmBox = h("div", { hidden: true })),
       h("div", { class: "dlg-foot" },
-        isNew ? null : h("button", { type: "button", class: "btn danger", on: { click: askDelete } }, icon("trash"), "삭제"),
+        h("button", { type: "button", class: "btn danger", on: { click: askDelete } }, icon("trash"), "삭제"),
         h("span", { class: "grow" }),
         h("button", { type: "button", class: "btn", on: { click: () => close() } }, "취소"),
         h("button", { type: "submit", class: "btn pri" }, "저장"),
       ),
-    );
-    return form;
-  });
-  paintDays();
-  nameEl.focus();
+    ));
 
   async function save() {
     errEl.textContent = "";
-    const body = { name: nameEl.value.trim(), time: timeEl.value, weekdays: draft.weekdays, program_id: progEl.value, enabled: enabledEl.checked, start_date: startEl.value || null, end_date: endEl.value || null };
-    if (body.start_date && body.end_date && body.end_date < body.start_date) return (errEl.textContent = "종료일이 시작일보다 빠릅니다.");
+    const body = { name: nameEl.value.trim(), time: draft.time, weekdays: draft.weekdays, program_id: progEl.value, enabled: enabledEl.checked, start_date: startEl.value || null, end_date: endEl.value || null };
     if (!body.name) return (errEl.textContent = "이름을 입력하세요.");
-    if (!body.time) return (errEl.textContent = "시각을 입력하세요.");
     if (!body.weekdays.length) return (errEl.textContent = "요일을 하나 이상 고르세요.");
-    const clash = st.week.rows
-      .map((r) => r.slot)
-      .filter((s) => s.id !== slot?.id && s.enabled && body.enabled && s.time === body.time && s.weekdays.some((d) => body.weekdays.includes(d)));
-    const clashKey = `${body.time}|${body.weekdays.join(",")}`;
-    if (clash.length && overlapConfirmed !== clashKey) {
-      overlapConfirmed = clashKey;
-      errEl.textContent = `같은 시각(${body.time})에 '${clash.map((s) => s.name).join("', '")}' 회차가 있어 방송이 이어서 나갑니다. 그래도 저장하려면 저장을 한 번 더 누르세요.`;
+    if (body.start_date && body.end_date && body.end_date < body.start_date) return (errEl.textContent = "종료일이 시작일보다 빠릅니다.");
+    const clash = (ctx.weekSlots || []).filter((s) => s.id !== slot.id && s.enabled && body.enabled && s.time === body.time && s.weekdays.some((d) => body.weekdays.includes(d)));
+    const key = `${body.time}|${body.weekdays.join(",")}`;
+    if (clash.length && overlapConfirmed !== key) {
+      overlapConfirmed = key;
+      errEl.textContent = `같은 시각(${body.time})에 '${clash.map((s) => s.name).join("', '")}' 회차가 있어 이어서 방송돼요. 한 번 더 누르면 저장합니다.`;
       return;
     }
     try {
-      if (isNew) await post("/api/slots", body);
-      else await put(`/api/slots/${slot.id}`, body);
+      await put(`/api/slots/${slot.id}`, body);
       close();
-      await refreshAfterChange(isNew ? "회차를 추가했습니다." : "매주 일정을 바꿨습니다.");
+      await refresh("저장했습니다.");
     } catch (err) {
       errEl.textContent = err.message;
     }
@@ -559,86 +485,54 @@ function openSlotDialog(slot) {
 
   function askDelete() {
     confirmBox.hidden = false;
-    confirmBox.replaceChildren(
-      h("div", { class: "confirm-row" },
-        h("span", { class: "grow" }, "이 회차와 이 회차의 날짜별 예외를 지웁니다."),
-        h("button", { type: "button", class: "btn sm", on: { click: () => (confirmBox.hidden = true) } }, "취소"),
-        h("button", { type: "button", class: "btn sm stop", on: { click: doDelete } }, "지우기"),
-      ),
-    );
-  }
-
-  async function doDelete() {
-    try {
-      await del(`/api/slots/${slot.id}`);
-      close();
-      st.selected = null;
-      await refreshAfterChange("회차를 지웠습니다.");
-    } catch (err) {
-      errEl.textContent = err.message;
-    }
+    confirmBox.replaceChildren(h("div", { class: "confirm-row" },
+      h("span", { class: "grow" }, "이 회차를 지웁니다."),
+      h("button", { type: "button", class: "btn sm", on: { click: () => (confirmBox.hidden = true) } }, "취소"),
+      h("button", { type: "button", class: "btn sm stop", on: { click: async () => {
+        try { await del(`/api/slots/${slot.id}`); close(); await refresh("지웠습니다."); } catch (err) { errEl.textContent = err.message; }
+      } } }, "지우기")));
   }
 }
 
-// 쉬는 날 대화상자 -------------------------------------------------------------------
+// 쉬는 날: 달력에서 기간 고르기 ----------------------------------------------------------------
 async function openDaysOffDialog(prefill) {
-  let list, startEl, endEl, memoEl, errEl;
+  let list, memoEl, errEl;
+  let range = { start: prefill || todayIso(), end: prefill || todayIso() };
   const paint = async () => {
     try {
       const items = await get("/api/days-off");
-      list.replaceChildren(
-        ...(items.length
-          ? items.map((d) =>
-              h("div", { class: "notice" },
-                h("span", null, `${d.start === d.end ? fmtDate(d.start) : `${fmtDate(d.start)} ~ ${fmtDate(d.end)}`}${d.memo ? ` · ${d.memo}` : ""}`),
-                h("button", { class: "link", on: { click: async () => {
-                  try {
-                    await del(`/api/days-off/${d.id}`);
-                    await paint();
-                    await loadWeek();
-                  } catch (err) {
-                    errEl.textContent = err.message;
-                  }
-                } } }, "삭제"),
-              ))
-          : [h("p", { class: "hint" }, "등록한 쉬는 날이 없습니다.")]),
-      );
+      list.replaceChildren(...items.map((d) =>
+        h("span", { class: "off-chip" }, icon("ban"),
+          `${fmtMonthDay(d.start)}${d.start === d.end ? "" : `~${fmtMonthDay(d.end)}`}${d.memo ? ` ${d.memo}` : ""}`,
+          h("button", { class: "off-x", "aria-label": "삭제", on: { click: async () => {
+            try { await del(`/api/days-off/${d.id}`); await paint(); await loadWeek(); } catch (err) { errEl.textContent = err.message; }
+          } } }, icon("x")))));
     } catch (err) {
       errEl.textContent = err.message;
     }
   };
-  const today = ctx.status.now.slice(0, 10);
   openDialog("쉬는 날", (close) =>
     h("div", { class: "dlg" },
       h("h2", null, "쉬는 날"),
-      (list = h("div", { style: { display: "grid", gap: "var(--s2)", maxHeight: "220px", overflow: "auto" } })),
-      h("form", { style: { display: "grid", gap: "var(--s3)" }, on: { submit: async (e) => {
-        e.preventDefault();
-        errEl.textContent = "";
-        if (!startEl.value || !endEl.value) return (errEl.textContent = "시작 날짜와 끝 날짜를 고르세요.");
-        if (endEl.value < startEl.value) return (errEl.textContent = "끝 날짜가 시작 날짜보다 빠릅니다.");
-        try {
-          await post("/api/days-off", { start: startEl.value, end: endEl.value, memo: memoEl.value.trim() });
-          memoEl.value = "";
-          await paint();
-          await loadWeek();
-          toast("쉬는 날을 추가했습니다.");
-        } catch (err) {
-          errEl.textContent = err.message;
-        }
-      } } },
-        h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s3)" } },
-          h("label", { class: "field" }, h("span", null, "시작"), (startEl = h("input", { class: "input", type: "date", value: prefill || today, on: { change: () => { if (endEl.value < startEl.value) endEl.value = startEl.value; } } }))),
-          h("label", { class: "field" }, h("span", null, "끝"), (endEl = h("input", { class: "input", type: "date", value: prefill || today }))),
-        ),
-        h("label", { class: "field" }, h("span", null, "메모 (선택)"), (memoEl = h("input", { class: "input", maxlength: 60, placeholder: "예: 겨울 방학" }))),
-        (errEl = h("p", { class: "err", role: "alert" })),
-        h("div", { class: "dlg-foot" },
-          h("button", { type: "button", class: "btn", on: { click: () => close() } }, "닫기"),
-          h("button", { type: "submit", class: "btn pri" }, "추가"),
-        ),
+      (list = h("div", { class: "off-list" })),
+      rangeCalendar({ start: range.start, end: range.end, min: addDays(todayIso(), -365), allowOpen: false }, (v) => (range = { start: v.start, end: v.end || v.start })),
+      (memoEl = h("input", { class: "input", maxlength: 60, placeholder: "메모 (예: 겨울 방학)", "aria-label": "메모" })),
+      (errEl = h("p", { class: "err", role: "alert" })),
+      h("div", { class: "dlg-foot" },
+        h("button", { class: "btn", on: { click: () => close() } }, "닫기"),
+        h("button", { class: "btn pri", on: { click: async () => {
+          errEl.textContent = "";
+          try {
+            await post("/api/days-off", { start: range.start, end: range.end, memo: memoEl.value.trim() });
+            memoEl.value = "";
+            await paint();
+            await loadWeek();
+            toast("쉬는 날을 추가했습니다.");
+          } catch (err) {
+            errEl.textContent = err.message;
+          }
+        } } }, icon("plus"), "추가"),
       ),
-    ),
-  );
+    ));
   await paint();
 }

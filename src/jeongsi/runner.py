@@ -242,7 +242,7 @@ class Runner:
                 "slot_id": job.slot_id,
                 "date": job.date.isoformat() if job.date else None,
                 "program_id": job.program.id,
-                "plays": [{"label": u.label, "seconds": round(u.seconds, 1)} for u in units],
+                "plays": [{"label": u.label, "kind": u.step.kind, "seconds": round(u.seconds, 1)} for u in units],
                 "index": 0,
                 "play_started": None,
             }
