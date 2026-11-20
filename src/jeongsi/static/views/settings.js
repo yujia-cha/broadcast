@@ -42,17 +42,27 @@ async function save(changes, savedEl) {
 }
 
 function defaultNote(key, text) {
-  const changed = settings[key] !== DEFAULTS[key];
-  return h("span", { class: `def${changed ? " changed" : ""}` }, changed ? `기본: ${text}` : `기본값`);
+  const el = h("span");
+  paintDefault(el, settings[key] !== DEFAULTS[key], text);
+  return el;
 }
 
+function paintDefault(el, changed, text) {
+  el.className = `def${changed ? " changed" : ""}`;
+  el.textContent = changed ? `기본: ${text}` : "기본값";
+}
+
+// 체크박스는 그 줄만 갱신한다(화면 전체를 다시 그리면 "저장됨" 표시와 포커스가 사라진다)
 function checkRow(key, title, desc, defText) {
   const id = `set-${key}`;
   const saved = h("span", { class: "saved", "aria-live": "polite" });
+  const def = defaultNote(key, defText);
   return h("div", { class: "srow" },
-    h("input", { type: "checkbox", id, checked: settings[key], on: { change: async (e) => { if (await save({ [key]: e.target.checked }, saved)) render(); } } }),
+    h("input", { type: "checkbox", id, checked: settings[key], on: { change: async (e) => {
+      if (await save({ [key]: e.target.checked }, saved)) paintDefault(def, settings[key] !== DEFAULTS[key], defText);
+    } } }),
     h("label", { for: id }, h("span", null, title), h("span", { class: "d" }, desc), saved),
-    defaultNote(key, defText),
+    def,
   );
 }
 
@@ -60,6 +70,16 @@ function render() {
   const s = settings;
   const volSaved = h("span", { class: "saved", "aria-live": "polite" });
   const volValue = h("span", { style: { minWidth: "40px" } }, `${s.volume}%`);
+  const volDef = h("span");
+  const paintVolumeDefault = () => paintDefault(volDef, settings.set_volume !== true || settings.volume !== 70, "켬 · 70%");
+  paintVolumeDefault();
+  const volSlider = h("input", {
+    type: "range", min: 0, max: 100, step: 5, value: s.volume, disabled: !s.set_volume, "aria-label": "방송 음량",
+    on: {
+      input: (e) => (volValue.textContent = `${e.target.value}%`),
+      change: async (e) => { if (await save({ volume: Number(e.target.value) }, volSaved)) paintVolumeDefault(); },
+    },
+  });
   const voices = ctx.voices || [];
   const rateSaved = h("span", { class: "saved", "aria-live": "polite" });
   const updateMsg = h("span", { class: "meta" });
@@ -78,19 +98,20 @@ function render() {
     h("section", { class: "card sgrp", "aria-labelledby": "g-sound" },
       h("h3", { id: "g-sound" }, "방송 소리"),
       h("div", { class: "srow" },
-        h("input", { type: "checkbox", id: "set-set_volume", checked: s.set_volume, on: { change: async (e) => { if (await save({ set_volume: e.target.checked }, volSaved)) render(); } } }),
+        h("input", { type: "checkbox", id: "set-set_volume", checked: s.set_volume, on: { change: async (e) => {
+          if (!(await save({ set_volume: e.target.checked }, volSaved))) return;
+          volSlider.disabled = !settings.set_volume;
+          paintVolumeDefault();
+        } } }),
         h("div", { style: { display: "grid", gap: "var(--s2)" } },
           h("label", { for: "set-set_volume" }, h("span", null, "방송할 때 음량 맞추기")),
           h("div", { class: "range" },
-            h("input", {
-              type: "range", min: 0, max: 100, step: 5, value: s.volume, disabled: !s.set_volume, "aria-label": "방송 음량",
-              on: { input: (e) => (volValue.textContent = `${e.target.value}%`), change: (e) => save({ volume: Number(e.target.value) }, volSaved) },
-            }),
+            volSlider,
             volValue, volSaved,
           ),
           h("span", { class: "d" }, "PC가 음소거여도 방송 동안만 풀고, 끝나면 원래 음량·음소거로 되돌립니다."),
         ),
-        h("span", { class: `def${s.set_volume !== true || s.volume !== 70 ? " changed" : ""}` }, s.set_volume !== true || s.volume !== 70 ? "기본: 켬 · 70%" : "기본값"),
+        volDef,
       ),
       checkRow("pause_media", "재생 중인 영상·음악 일시정지", "YouTube, Spotify처럼 일시정지를 지원하는 앱. 방송이 끝나면 다시 재생합니다.", "켬"),
       checkRow("mute_others", "다른 앱 소리 음소거", "일시정지를 지원하지 않는 앱과 알림음까지 방송 동안 음소거합니다.", "켬"),

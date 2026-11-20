@@ -15,3 +15,6 @@ docs/design*
 design-notes.md
 CLAUDE.md
 .claude/
+e2e-screenshots/
+node_modules/
+package-lock.json

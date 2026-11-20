@@ -29,3 +29,28 @@ jobs:
         run: pip install ".[dev,windows]"
       - name: 테스트 (Windows는 실제 오디오 통합 테스트 포함)
         run: python -m pytest -q -rs -s
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 의존성 설치
+        run: |
+          pip install ".[dev]"
+          npm install --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+      - name: 화면 E2E
+        run: python tests/e2e/run_e2e.py e2e-screenshots
+      - name: 스크린샷 올리기
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e-screenshots
+          retention-days: 7
