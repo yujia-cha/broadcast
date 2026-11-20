@@ -24,7 +24,8 @@ def set_enabled(enabled: bool) -> None:
         return
     import winreg
 
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+    # 새 사용자 프로필에는 Run 키가 없을 수 있어 없으면 만든다
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
         if enabled:
             winreg.SetValueEx(key, APP_ID, 0, winreg.REG_SZ, cmd)
         else:

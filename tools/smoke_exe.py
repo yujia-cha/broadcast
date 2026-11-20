@@ -110,11 +110,11 @@ def dev_mode(exe: Path, work: Path) -> str:
 def run_key_value() -> str | None:
     import winreg
 
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
-        try:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
             return winreg.QueryValueEx(key, "JeongsiBroadcast")[0]
-        except FileNotFoundError:
-            return None
+    except FileNotFoundError:
+        return None
 
 
 def real_mode(exe: Path, work: Path) -> str:

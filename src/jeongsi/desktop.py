@@ -183,4 +183,6 @@ def run_desktop(args, data_dir: Path) -> int:
         application.stop()
         server.should_exit = True
         server_thread.join(5)
-    return 0
+        # 트레이·WinRT 같은 백그라운드 스레드가 남아 프로세스가 끝나지 않는 일을 막는다(업데이트 교체에 필요)
+        logging.shutdown()
+        os._exit(0)

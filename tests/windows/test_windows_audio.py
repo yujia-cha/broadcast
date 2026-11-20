@@ -210,3 +210,20 @@ def test_full_broadcast_pipeline_with_real_adapters(tmp_path):
     assert entry["result"] == "done", entry["error"]
     assert backend.player.played[0] == "a1b2c3d4-chime.wav" and len(backend.player.played) == 3
     assert not (tmp_path / "work" / "restore.json").exists()
+
+
+def test_autostart_creates_missing_run_key(monkeypatch):
+    # 설치된 exe인 것처럼 꾸며 실제 HKCU Run 키에 등록·해제한다
+    import winreg
+
+    from jeongsi import autostart
+
+    monkeypatch.setattr(autostart, "command", lambda: '"C:\\\\test\\\\JeongsiBroadcast.exe" --autostart')
+    monkeypatch.setattr(autostart, "APP_ID", "JeongsiBroadcastTest")
+    autostart.set_enabled(True)
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, autostart.RUN_KEY) as key:
+        assert "--autostart" in winreg.QueryValueEx(key, "JeongsiBroadcastTest")[0]
+    autostart.set_enabled(False)
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, autostart.RUN_KEY) as key:
+        with pytest.raises(FileNotFoundError):
+            winreg.QueryValueEx(key, "JeongsiBroadcastTest")
