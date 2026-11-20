@@ -181,7 +181,7 @@ def test_recover_restores_state_left_by_crash(tmp_path):
     # Arrange: 방송 도중 앱이 죽어 restore.json이 남은 상황
     runner, backend, _ = make_runner(tmp_path)
     restore = tmp_path / "work" / "restore.json"
-    restore.write_text(json.dumps({"paused": ["chrome"], "muted": ["game"], "volume": [0.25, True]}))
+    restore.write_text(json.dumps({"paused": ["chrome"], "muted": ["game"], "volume": [0.25, True]}), encoding="utf-8")
     # Act
     runner.recover()
     # Assert
@@ -192,7 +192,7 @@ def test_recover_restores_state_left_by_crash(tmp_path):
 def test_recover_ignores_corrupt_file(tmp_path):
     runner, backend, _ = make_runner(tmp_path)
     restore = tmp_path / "work" / "restore.json"
-    restore.write_text("{깨짐")
+    restore.write_text("{깨짐", encoding="utf-8")
     runner.recover()
     assert backend.media.calls == [] and not restore.exists()
 
@@ -202,3 +202,24 @@ def test_expand_and_estimate_program():
     units = expand_program(prog, lambda name: 4.0)
     assert [u.label for u in units] == ["차임", "음성 · 반복 1/2", "음성 · 반복 2/2"]
     assert estimate_program_seconds(prog, lambda name: 4.0) == pytest.approx(4 + (8 / 7) * 2 + 3)  # 8글자 ÷ 초당 7글자
+
+
+class Broken:
+    def __getattr__(self, name):
+        def fail(*args, **kwargs):
+            raise RuntimeError(f"{name} 실패(테스트)")
+        return fail
+
+
+def test_ducking_failures_do_not_stop_broadcast(tmp_path):
+    # Arrange: 출력 장치가 없어 음소거·음량이 실패하는 PC
+    backend = fake_backend()
+    backend.muter = Broken()
+    backend.volume = Broken()
+    runner, backend, history = make_runner(tmp_path, backend)
+    # Act
+    runner._execute(job())
+    # Assert: 일시정지·재생·복원은 그대로 진행
+    assert history.recent()[0].result == "done"
+    assert backend.media.calls == [("pause",), ("resume", ["chrome"])]
+    assert len(backend.player.played) == 3

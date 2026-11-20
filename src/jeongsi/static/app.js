@@ -64,7 +64,7 @@ async function poll() {
   }
 }
 
-function applyTheme(theme) {
+export function applyTheme(theme) {
   const root = document.documentElement;
   if (theme === "light" || theme === "dark") root.dataset.theme = theme;
   else delete root.dataset.theme;
@@ -193,6 +193,7 @@ async function start() {
   }
   document.getElementById("auto-switch").addEventListener("click", toggleAuto);
   document.getElementById("update-btn").addEventListener("click", openUpdateDialog);
+  window.jeongsiOpenUpdate = openUpdateDialog; // 트레이 메뉴의 "새 버전 설치"에서 부른다
   window.addEventListener("hashchange", () => {
     const name = location.hash.slice(1);
     if (name !== currentName) navigate(name);

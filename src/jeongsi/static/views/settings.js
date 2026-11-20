@@ -127,7 +127,12 @@ function render() {
           h("span", { id: "theme-label" }, "테마"),
           h("div", { class: "radios", role: "radiogroup", "aria-labelledby": "theme-label", style: { maxWidth: "320px" } },
             [["system", "시스템 설정"], ["light", "밝게"], ["dark", "어둡게"]].map(([v, label]) =>
-              h("button", { role: "radio", "aria-checked": String(s.theme === v), on: { click: async () => { if (await save({ theme: v })) render(); } } }, label)),
+              h("button", { role: "radio", "aria-checked": String(s.theme === v), on: { click: async () => {
+                if (!(await save({ theme: v }))) return;
+                if (v === "system") delete document.documentElement.dataset.theme;
+                else document.documentElement.dataset.theme = v;
+                render();
+              } } }, label)),
           ),
         ),
         defaultNote("theme", "시스템 설정"),

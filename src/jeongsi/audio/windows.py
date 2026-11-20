@@ -16,6 +16,8 @@ import contextlib
 import logging
 import os
 import threading
+import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .base import AudioBackend, SpeechError, Voice
@@ -34,9 +36,28 @@ def com_thread() -> None:
     _com_local.ready = True
 
 
+_winrt_pool: ThreadPoolExecutor | None = None
+_winrt_pool_lock = threading.Lock()
+WINRT_TIMEOUT = 60
+
+
+def _init_mta() -> None:
+    import ctypes
+
+    ctypes.windll.ole32.CoInitializeEx(None, 0)  # COINIT_MULTITHREADED
+
+
 def _run_async(coro):
-    """WinRT 비동기 호출을 이 스레드에서 끝까지 기다린다."""
-    return asyncio.run(coro)
+    """WinRT 비동기 호출을 MTA로 초기화한 전용 스레드에서 끝까지 기다린다.
+
+    comtypes(pycaw)는 호출한 스레드를 STA로 초기화하는데, 그 스레드에서 WinRT 미디어 세션을
+    다시 얻으면 RPC_E_WRONG_THREAD가 난다(Windows 러너에서 확인). WinRT는 전용 MTA 스레드에서만 부른다.
+    """
+    global _winrt_pool
+    with _winrt_pool_lock:
+        if _winrt_pool is None:
+            _winrt_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="winrt", initializer=_init_mta)
+    return _winrt_pool.submit(asyncio.run, coro).result(WINRT_TIMEOUT)
 
 
 # ---------------------------------------------------------------- 미디어 일시정지
@@ -63,7 +84,7 @@ class WindowsMediaSessions:
                 if session.get_playback_info().playback_status == Status.PLAYING:
                     if await session.try_pause_async():
                         paused.append(session.source_app_user_model_id)
-            except OSError:
+            except Exception:
                 log.exception("미디어 세션 일시정지 실패")
         return paused
 
@@ -74,7 +95,7 @@ class WindowsMediaSessions:
             try:
                 if session.source_app_user_model_id in ids and session.get_playback_info().playback_status == Status.PAUSED:
                     await session.try_play_async()
-            except OSError:
+            except Exception:
                 log.exception("미디어 세션 다시 재생 실패")
 
 
@@ -91,12 +112,20 @@ class WindowsAppMuter:
         name = proc.name() if proc else "system"
         return f"{session.ProcessId}:{name}"
 
-    def mute_others(self) -> list[str]:
+    @staticmethod
+    def _sessions() -> list:
         com_thread()
         from pycaw.pycaw import AudioUtilities
 
+        try:
+            return AudioUtilities.GetAllSessions()
+        except Exception as exc:  # 출력 장치가 없으면 COMError(요소를 찾을 수 없음)
+            log.warning("오디오 세션을 가져오지 못했습니다(출력 장치 없음?): %r", exc)
+            return []
+
+    def mute_others(self) -> list[str]:
         newly = []
-        for session in AudioUtilities.GetAllSessions():
+        for session in self._sessions():
             if session.ProcessId == self._own_pid:
                 continue
             try:
@@ -104,20 +133,17 @@ class WindowsAppMuter:
                 if not volume.GetMute():
                     volume.SetMute(1, None)
                     newly.append(self._key(session))
-            except OSError:
+            except Exception:
                 log.exception("앱 음소거 실패")
         return newly
 
     def unmute(self, keys: list[str]) -> None:
-        com_thread()
-        from pycaw.pycaw import AudioUtilities
-
         wanted = set(keys)
-        for session in AudioUtilities.GetAllSessions():
+        for session in self._sessions():
             try:
                 if self._key(session) in wanted:
                     session.SimpleAudioVolume.SetMute(0, None)
-            except OSError:
+            except Exception:
                 log.exception("앱 음소거 해제 실패")
 
 
@@ -166,13 +192,18 @@ class WindowsSpeech:
         try:
             data = _run_async(self._winrt_synthesize(text, voice_id, rate))
             out_path.write_bytes(data)
-            return
+            if _has_audio(out_path):
+                return
+            log.warning("WinRT 음성이 빈 소리를 만들었습니다. SAPI로 다시 시도합니다")
         except Exception:
             log.exception("WinRT 음성 합성 실패, SAPI로 다시 시도합니다")
         try:
             self._sapi_synthesize(text, voice_id, rate, out_path)
         except Exception as exc:
             raise SpeechError(f"음성을 만들지 못했습니다: {exc}") from exc
+        if not _has_audio(out_path):
+            out_path.unlink(missing_ok=True)
+            raise SpeechError("이 음성으로는 문구를 읽을 수 없습니다. 한국어 음성이 설치되어 있는지 확인하세요.")
 
     @staticmethod
     async def _winrt_synthesize(text: str, voice_id: str, rate: float) -> bytes:
@@ -180,10 +211,13 @@ class WindowsSpeech:
         from winrt.windows.storage.streams import DataReader
 
         synth = SpeechSynthesizer()
-        if voice_id:
-            match = next((v for v in SpeechSynthesizer.all_voices if v.id == voice_id), None)
-            if match is not None:
-                synth.voice = match
+        voices = list(SpeechSynthesizer.all_voices)
+        match = next((v for v in voices if v.id == voice_id), None) if voice_id else None
+        if match is None and not voice_id:
+            # 기본 음성: 한국어 음성이 있으면 그것을 쓴다(영문 Windows에 한국어 음성만 추가한 경우)
+            match = next((v for v in voices if v.language.lower().startswith("ko")), None)
+        if match is not None:
+            synth.voice = match
         synth.options.speaking_rate = rate
         stream = await synth.synthesize_text_to_stream_async(text)
         size = stream.size
@@ -214,11 +248,12 @@ class WindowsSpeech:
         stream = comtypes.client.CreateObject("SAPI.SpFileStream")
         from comtypes.gen import SpeechLib  # CreateObject 이후에 생성된다
 
-        if voice_id:
-            tokens = speaker.GetVoices()
-            for i in range(tokens.Count):
-                if tokens.Item(i).Id == voice_id:
-                    speaker.Voice = tokens.Item(i)
+        tokens = speaker.GetVoices()
+        for i in range(tokens.Count):
+            token = tokens.Item(i)
+            if (voice_id and token.Id == voice_id) or (not voice_id and "korean" in token.GetDescription().lower()):
+                speaker.Voice = token
+                break
         speaker.Rate = max(-10, min(10, round((rate - 1.0) * 10)))
         stream.Open(str(out_path), SpeechLib.SSFMCreateForWrite)
         try:
@@ -226,6 +261,14 @@ class WindowsSpeech:
             speaker.Speak(text)
         finally:
             stream.Close()
+
+
+def _has_audio(path: Path) -> bool:
+    try:
+        with wave.open(str(path), "rb") as w:
+            return w.getnframes() > 0
+    except (wave.Error, EOFError, OSError):
+        return path.exists() and path.stat().st_size > 1024  # WAV가 아닌 형식이면 크기로 판단
 
 
 # ---------------------------------------------------------------- 재생

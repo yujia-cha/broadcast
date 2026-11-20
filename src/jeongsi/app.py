@@ -357,10 +357,12 @@ def create_app(services: Services) -> FastAPI:
 
     @app.post("/api/preview", status_code=202)
     def preview(body: dict = Body(...)):
-        step = Step.model_validate({**body, "repeat": 1, "gap_sec": 0})
-        if step.kind == "audio" and s.media.seconds(step.file) is None:
-            raise _bad(422, "소리 파일을 찾을 수 없습니다.")
-        program = Program(name="미리듣기", steps=[step])
+        """단계 하나({kind, ...}) 또는 방송 구성 전체({name, steps})를 다른 소리 처리 없이 들려준다."""
+        if "steps" in body:
+            program = Program.model_validate({"name": str(body.get("name") or "").strip() or "미리듣기", "steps": body["steps"]})
+        else:
+            program = Program(name="미리듣기", steps=[Step.model_validate({**body, "repeat": 1, "gap_sec": 0})])
+        _check_files_exist(program)
         try:
             s.runner.enqueue(Job(kind="preview", name="미리듣기", program=program))
         except RunnerBusy as exc:

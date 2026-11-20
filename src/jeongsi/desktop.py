@@ -88,8 +88,17 @@ class DesktopShell:
         def toggle_auto(_icon, _item) -> None:
             services.store.update(lambda c: setattr(c.settings, "auto_broadcast", not c.settings.auto_broadcast))
 
+        def has_update(_item=None) -> bool:
+            return "release" in services.updater.status()
+
+        def open_update(_icon, _item) -> None:
+            self.show_window()
+            if self.window is not None:
+                self.window.evaluate_js("window.jeongsiOpenUpdate && window.jeongsiOpenUpdate()")
+
         menu = pystray.Menu(
             pystray.MenuItem("열기", lambda: self.show_window(), default=True),
+            pystray.MenuItem("새 버전 설치…", open_update, visible=has_update),
             pystray.MenuItem("방송 끄기", lambda: services.runner.stop_current(), enabled=on_air),
             pystray.MenuItem("자동 방송", toggle_auto, checked=auto_on),
             pystray.Menu.SEPARATOR,

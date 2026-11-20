@@ -1,6 +1,6 @@
 // 방송 구성 화면: 왼쪽 목록, 오른쪽 단계 편집기
 import { api, del, post, put } from "../api.js";
-import { confirmDialog, fmtDuration, h, icon, stepBar, toast, toastError } from "../ui.js";
+import { confirmDialog, fmtDuration, h, icon, openDialog, stepBar, toast, toastError } from "../ui.js";
 
 const TTS_CHARS_PER_SECOND = 7;
 const RATES = [0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0];
@@ -73,6 +73,7 @@ function renderList() {
         h("span", null, `약 ${fmtDuration(p.seconds)}${p.used_by.length ? ` · ${p.used_by.join(", ")}` : " · 쓰는 회차 없음"}`),
       ),
     ),
+    h("button", { class: "btn ghost", on: { click: openMediaDialog } }, `올린 소리 파일 ${ctx.media.length}개 관리`),
   );
 }
 
@@ -111,9 +112,11 @@ function renderEditor() {
   const units = expand(d);
   const total = units.reduce((a, u) => a + u.seconds, 0) + d.steps.reduce((a, s) => a + (s.repeat - 1) * s.gap_sec, 0);
   const errMsg = st.errorMessage ? h("p", { class: "err", role: "alert" }, st.errorMessage) : null;
+  const previewingAll = st.previewing === "all";
   const foot = h("div", { class: "editor-foot" },
     h("span", { class: "meta" }, `${d.steps.length}단계 · 약 ${fmtDuration(total)}`),
     stepBar(units, { preview: true }),
+    h("button", { class: "btn", on: { click: () => (previewingAll ? stopPreview() : previewAll()) } }, icon(previewingAll ? "stop" : "play"), previewingAll ? "정지" : "전체 미리듣기"),
     d.id ? h("button", { class: "btn danger", on: { click: () => removeProgram(program) } }, icon("trash"), "삭제") : null,
     h("button", { class: "btn pri", on: { click: save } }, "저장"),
   );
@@ -159,6 +162,7 @@ function stepCard(step, i) {
     h("div", { class: "row" },
       h("button", { class: "ibtn", "aria-label": `${i + 1}단계를 위로`, disabled: i === 0, on: { click: () => move(i, -1) } }, icon("up")),
       h("button", { class: "ibtn", "aria-label": `${i + 1}단계를 아래로`, disabled: i === d.steps.length - 1, on: { click: () => move(i, 1) } }, icon("down")),
+      h("button", { class: "ibtn", "aria-label": `${i + 1}단계 복제`, disabled: d.steps.length >= 30, on: { click: () => duplicate(i) } }, icon("copy")),
       h("button", { class: "ibtn", "aria-label": `${i + 1}단계 삭제`, disabled: d.steps.length === 1, on: { click: () => { d.steps.splice(i, 1); renderEditor(); } } }, icon("trash")),
     ),
   );
@@ -225,6 +229,12 @@ function addStep(kind) {
   editorEl.querySelectorAll(".step").item(st.draft.steps.length - 1)?.querySelector("textarea, select")?.focus();
 }
 
+function duplicate(i) {
+  const copy = { ...st.draft.steps[i], id: crypto.randomUUID().replaceAll("-", "").slice(0, 12) };
+  st.draft.steps.splice(i + 1, 0, copy);
+  renderEditor();
+}
+
 function move(i, delta) {
   const steps = st.draft.steps;
   [steps[i], steps[i + delta]] = [steps[i + delta], steps[i]];
@@ -254,6 +264,23 @@ async function preview(step) {
   try {
     await post("/api/preview", { ...step, repeat: 1, gap_sec: 0 });
     st.previewing = step.id;
+    renderEditor();
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+async function previewAll() {
+  const d = st.draft;
+  const problem = validate({ ...d, name: d.name || "미리듣기" });
+  if (problem) {
+    st.errorMessage = problem;
+    return renderEditor();
+  }
+  try {
+    await post("/api/preview", { name: d.name || "미리듣기", steps: d.steps });
+    st.previewing = "all";
+    st.errorMessage = "";
     renderEditor();
   } catch (err) {
     toastError(err);
@@ -318,3 +345,45 @@ async function removeProgram(program) {
   }
 }
 
+
+// 소리 파일 관리 -----------------------------------------------------------------
+function openMediaDialog() {
+  let list, errEl;
+  const usedBy = (name) => ctx.programs.filter((p) => p.steps.some((s) => s.kind === "audio" && s.file === name)).map((p) => p.name);
+  const paint = () => {
+    list.replaceChildren(
+      ...(ctx.media.length
+        ? ctx.media.map((m) => {
+            const users = usedBy(m.name);
+            return h("div", { class: "notice" },
+              h("span", { style: { minWidth: 0, overflowWrap: "anywhere" } },
+                m.display, h("span", { class: "hint" }, ` · ${m.seconds ? fmtDuration(m.seconds) : "길이 모름"} · ${users.length ? users.join(", ") : "쓰지 않음"}`)),
+              h("button", {
+                class: "link", disabled: users.length > 0, title: users.length ? "쓰는 방송 구성이 있어 지울 수 없습니다" : null,
+                on: { click: async () => {
+                  try {
+                    await del(`/api/media/${encodeURIComponent(m.name)}`);
+                    await ctx.loadMedia();
+                    paint();
+                    renderList();
+                  } catch (err) {
+                    errEl.textContent = err.message;
+                  }
+                } },
+              }, "삭제"),
+            );
+          })
+        : [h("p", { class: "hint" }, "올린 소리 파일이 없습니다. 음악·소리 단계에서 파일을 올리세요.")]),
+    );
+  };
+  openDialog("올린 소리 파일", (close) =>
+    h("div", { class: "dlg" },
+      h("h2", null, "올린 소리 파일"),
+      h("p", { class: "hint" }, "방송 구성에서 쓰지 않는 파일만 지울 수 있습니다."),
+      (list = h("div", { style: { display: "grid", gap: "var(--s2)", maxHeight: "320px", overflow: "auto" } })),
+      (errEl = h("p", { class: "err", role: "alert" })),
+      h("div", { class: "dlg-foot" }, h("button", { class: "btn", on: { click: () => close() } }, "닫기")),
+    ),
+  );
+  paint();
+}

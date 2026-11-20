@@ -297,16 +297,26 @@ class Runner:
         return path
 
     def _duck(self, state: RestoreState, settings: Settings) -> None:
+        """다른 소리 처리. 하나가 실패해도 방송은 내보낸다(최선 노력)."""
         if settings.pause_media:
-            state.paused = self._audio.media.pause_playing()
-            self._save_restore(state)
+            try:
+                state.paused = self._audio.media.pause_playing()
+                self._save_restore(state)
+            except Exception:
+                log.exception("미디어 일시정지 실패, 계속 방송합니다")
         if settings.mute_others:
-            state.muted = self._audio.muter.mute_others()
-            self._save_restore(state)
+            try:
+                state.muted = self._audio.muter.mute_others()
+                self._save_restore(state)
+            except Exception:
+                log.exception("다른 앱 음소거 실패, 계속 방송합니다")
         if settings.set_volume:
-            state.volume = self._audio.volume.get()
-            self._save_restore(state)  # 바꾸기 전에 기록
-            self._audio.volume.set(settings.volume / 100, False)
+            try:
+                state.volume = self._audio.volume.get()
+                self._save_restore(state)  # 바꾸기 전에 기록
+                self._audio.volume.set(settings.volume / 100, False)
+            except Exception:
+                log.exception("방송 음량 적용 실패, 계속 방송합니다")
 
     def _restore(self, state: RestoreState) -> None:
         steps: list[tuple[str, Callable[[], None]]] = []

@@ -487,6 +487,7 @@ function openSlotDialog(slot) {
   const isNew = !slot;
   const draft = slot ? { ...slot, weekdays: [...slot.weekdays] } : { name: "", time: "09:00", weekdays: [0, 1, 2, 3, 4], program_id: ctx.programs[0].id, enabled: true };
   let nameEl, timeEl, progEl, enabledEl, errEl, dayBox, confirmBox;
+  let overlapConfirmed = null;
 
   const paintDays = () =>
     dayBox.replaceChildren(
@@ -533,6 +534,15 @@ function openSlotDialog(slot) {
     if (!body.name) return (errEl.textContent = "이름을 입력하세요.");
     if (!body.time) return (errEl.textContent = "시각을 입력하세요.");
     if (!body.weekdays.length) return (errEl.textContent = "요일을 하나 이상 고르세요.");
+    const clash = st.week.rows
+      .map((r) => r.slot)
+      .filter((s) => s.id !== slot?.id && s.enabled && body.enabled && s.time === body.time && s.weekdays.some((d) => body.weekdays.includes(d)));
+    const clashKey = `${body.time}|${body.weekdays.join(",")}`;
+    if (clash.length && overlapConfirmed !== clashKey) {
+      overlapConfirmed = clashKey;
+      errEl.textContent = `같은 시각(${body.time})에 '${clash.map((s) => s.name).join("', '")}' 회차가 있어 방송이 이어서 나갑니다. 그래도 저장하려면 저장을 한 번 더 누르세요.`;
+      return;
+    }
     try {
       if (isNew) await post("/api/slots", body);
       else await put(`/api/slots/${slot.id}`, body);

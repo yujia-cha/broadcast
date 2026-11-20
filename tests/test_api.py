@@ -235,3 +235,19 @@ def test_update_apply_without_release_is_refused(env):
 def test_update_check_offline_returns_502(env):
     client, _, _ = env
     assert client.post("/api/update/check", headers=HEADERS).status_code == 502
+
+
+def test_preview_whole_program(env):
+    client, _, backend = env
+    body = {"name": "", "steps": [{"kind": "audio", "file": "a1b2c3d4-chime.wav"}, {"kind": "tts", "text": "안내", "repeat": 2}]}
+    assert client.post("/api/preview", json=body, headers=HEADERS).status_code == 202
+    assert backend.player.started.wait(2)
+    assert backend.media.calls == []  # 미리듣기는 다른 소리를 건드리지 않는다
+    client.post("/api/broadcast/stop", headers=HEADERS)
+
+
+def test_preview_program_with_missing_file_is_rejected(env):
+    client, _, _ = env
+    body = {"steps": [{"kind": "audio", "file": "a1b2c3d4-gone.wav"}]}
+    res = client.post("/api/preview", json=body, headers=HEADERS)
+    assert res.status_code == 422 and "찾을 수 없습니다" in res.json()["error"]
