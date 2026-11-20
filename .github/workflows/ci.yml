@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,5 +27,5 @@ jobs:
       - name: 의존성 설치 (Windows)
         if: runner.os == 'Windows'
         run: pip install ".[dev,windows]"
-      - name: 테스트
-        run: python -m pytest -q
+      - name: 테스트 (Windows는 실제 오디오 통합 테스트 포함)
+        run: python -m pytest -q -rs -s
