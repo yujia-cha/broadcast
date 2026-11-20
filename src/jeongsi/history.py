@@ -42,10 +42,10 @@ class History:
 
     def append(self, entry: HistoryEntry) -> None:
         with self._lock:
+            entries = self._read_all()  # 파일에 쓰기 전에 읽어야 새 줄이 두 번 들어가지 않는다
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._path, "a", encoding="utf-8") as fh:
                 fh.write(entry.model_dump_json() + "\n")
-            entries = self._read_all()
             entries.append(entry)
             if len(entries) > MAX_LINES:
                 entries = entries[-KEEP_LINES:]

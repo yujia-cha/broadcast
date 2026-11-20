@@ -1,0 +1,61 @@
+name: Release
+
+# v1.2.0 같은 태그를 push하면 Windows exe와 SHA-256 파일을 만들어 릴리즈에 올린다.
+# 앱은 이 릴리즈의 JeongsiBroadcast.exe와 JeongsiBroadcast.exe.sha256으로 업데이트한다.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 태그 버전을 앱 버전으로 반영
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          if ($version -notmatch '^\d+(\.\d+)*$') { throw "태그는 v1.2.0 형식이어야 합니다: ${{ github.ref_name }}" }
+          $path = "src/jeongsi/__init__.py"
+          (Get-Content $path -Raw -Encoding utf8) -replace '__version__ = ".*"', "__version__ = `"$version`"" | Set-Content $path -NoNewline -Encoding utf8
+
+      - name: 의존성 설치
+        run: pip install ".[dev,windows]" "pyinstaller==6.11.1"
+
+      - name: 테스트
+        run: python -m pytest -q
+
+      - name: 아이콘 만들기
+        run: python tools/make_icon.py build/icon.ico
+
+      - name: exe 빌드
+        run: >
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name JeongsiBroadcast
+          --icon build/icon.ico
+          --collect-data jeongsi
+          --collect-submodules uvicorn
+          --collect-submodules winrt
+          --collect-submodules pycaw
+          tools/launcher.py
+
+      - name: SHA-256 파일 만들기
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/JeongsiBroadcast.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  JeongsiBroadcast.exe" | Out-File -FilePath dist/JeongsiBroadcast.exe.sha256 -Encoding ascii -NoNewline
+
+      - name: 릴리즈에 올리기
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/JeongsiBroadcast.exe
+            dist/JeongsiBroadcast.exe.sha256
+          generate_release_notes: true

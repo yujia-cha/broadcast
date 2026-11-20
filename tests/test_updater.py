@@ -167,3 +167,9 @@ def test_apply_update_rolls_back_when_new_file_missing(tmp_path):
     with pytest.raises(UpdateError):
         apply_update(tmp_path / "missing.exe", exe, launch=lambda args: None)
     assert exe.read_bytes() == b"old"
+
+
+def test_mark_error_sets_state_and_message():
+    updater = Updater("1.0.0", opener=opener({}))
+    updater.mark_error("쓸 수 없음")
+    assert updater.status() == {"state": "error", "message": "쓸 수 없음", "current": "1.0.0"}

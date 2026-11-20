@@ -90,3 +90,14 @@ def test_history_skips_corrupt_lines(tmp_path):
     path = tmp_path / "history.jsonl"
     path.write_text("not json\n" + _entry().model_dump_json() + "\n", encoding="utf-8")
     assert len(History(path).recent()) == 1
+
+
+def test_history_first_append_is_not_duplicated_in_memory(tmp_path):
+    # Arrange: 이미 기록이 있는 파일을 새로 연 상태(캐시 없음)
+    path = tmp_path / "history.jsonl"
+    History(path).append(_entry(slot="morning"))
+    history = History(path)
+    # Act
+    history.append(_entry(slot="lunch"))
+    # Assert
+    assert [e.slot_id for e in history.recent()] == ["lunch", "morning"]

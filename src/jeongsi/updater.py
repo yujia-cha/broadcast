@@ -94,6 +94,9 @@ class Updater:
         snap["current"] = self.current_version
         return snap
 
+    def mark_error(self, message: str) -> None:
+        self._set(state="error", message=message)
+
     def _set(self, **values) -> None:
         with self._lock:
             self._state = values
@@ -172,6 +175,11 @@ class Updater:
             partial.unlink(missing_ok=True)
             self._set(state="error", message=str(exc))
             raise
+        except PermissionError as exc:
+            partial.unlink(missing_ok=True)
+            message = "이 폴더에는 업데이트를 쓸 수 없습니다. 릴리즈 페이지에서 새 버전을 직접 받아 주세요."
+            self._set(state="error", message=message)
+            raise UpdateError(message) from exc
         except OSError as exc:
             partial.unlink(missing_ok=True)
             self._set(state="error", message="업데이트 파일을 받지 못했습니다.")

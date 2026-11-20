@@ -471,11 +471,13 @@ def create_app(services: Services) -> FastAPI:
 
         def work():
             try:
-                new_file = s.updater.download(release, s.data_dir / "update")
+                # exe와 같은 폴더에 받아야 같은 드라이브 안에서 바로 바꿀 수 있고, 쓰기 권한도 미리 확인된다
+                new_file = s.updater.download(release, exe.parent)
                 apply_update(new_file, exe)
                 s.shell.request_exit()
             except UpdateError as exc:
                 log.error("업데이트 실패: %s", exc)
+                s.updater.mark_error(str(exc))
 
         threading.Thread(target=work, name="update", daemon=True).start()
         return {"ok": True}

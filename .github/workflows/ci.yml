@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 의존성 설치 (Linux)
+        if: runner.os == 'Linux'
+        run: pip install ".[dev]"
+      - name: 의존성 설치 (Windows)
+        if: runner.os == 'Windows'
+        run: pip install ".[dev,windows]"
+      - name: 테스트
+        run: python -m pytest -q
