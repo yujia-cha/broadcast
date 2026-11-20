@@ -85,3 +85,12 @@ def next_occurrence(config: Config, now: datetime, search_days: int = 60) -> Occ
             if not occ.skipped and occ.at > now:
                 return occ
     return None
+
+
+def date_state(config: Config, slot_time: str, day: date, now: datetime) -> str:
+    """새 회차를 그 날짜에 둘 때 실제로 나가는지: "ok", "past"(이미 지남), "off"(쉬는 날)."""
+    if datetime.combine(day, parse_hhmm(slot_time)) <= now:
+        return "past"
+    if config.day_off_for(day) is not None:
+        return "off"
+    return "ok"

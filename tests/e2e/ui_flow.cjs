@@ -12,6 +12,7 @@ async function main() {
   const errors = [];
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
+  if (process.env.E2E_DEBUG) page.on("response", (r) => r.request().method() !== "GET" && console.log("  ", r.request().method(), r.url().replace(base, "/"), r.status()));
   const shot = async (name) => {
     await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(outDir, `${name}.png`) });
@@ -62,8 +63,10 @@ async function main() {
       await page.waitForSelector(".ticket >> text=점심 방송");
     });
 
-    await step("확인 체크 후 만들기 → 시간표에 블록", async () => {
-      if (!(await page.locator(".wz-cta >> text=만들기").isDisabled())) throw new Error("확인 전인데 만들기가 눌립니다");
+    await step("확인 없이 만들기 → 확인 칸 안내, 체크 후 만들기 → 시간표에 블록", async () => {
+      await page.click(".wz-cta >> text=만들기");
+      await page.waitForSelector(".wz-agree.nudge");
+      if (!(await page.isVisible("#wz-q >> text=이대로 만들까요?"))) throw new Error("확인 전인데 만들어졌습니다");
       await page.check("#wz-agree");
       await page.click(".wz-cta >> text=만들기");
       await page.waitForSelector("#wz-q >> text=예약했어요");
@@ -98,6 +101,7 @@ async function main() {
 
     await step("블록을 끌어 오늘만 시각 바꾸기", async () => {
       const blk = page.locator(".cal-col.today .cblock.next");
+      await blk.scrollIntoViewIfNeeded();
       const box = await blk.boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.down();
@@ -110,6 +114,21 @@ async function main() {
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 - hourPx, { steps: 4 });
       await page.mouse.up();
       await page.waitForSelector(".cal-col.today .cblock.chg >> text=22:55");
+      await page.waitForSelector("#toast.show .toast-act >> text=되돌리기");
+      await page.waitForFunction(() => !document.querySelector("#toast.show"), null, { timeout: 10000 });
+    });
+
+    await step("살짝 흔들린 클릭은 시각을 바꾸지 않음", async () => {
+      const blk = page.locator(".cal-col.today .cblock.chg");
+      await blk.scrollIntoViewIfNeeded();
+      const box = await blk.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 6, { steps: 3 });
+      await page.mouse.up();
+      await page.waitForSelector(".pop .ia >> text=원래대로");
+      await page.keyboard.press("Escape");
+      await page.waitForSelector(".cal-col.today .cblock.chg >> text=22:55");
     });
 
     await step("블록 누르기 → 원래대로", async () => {
@@ -118,10 +137,10 @@ async function main() {
       await page.waitForSelector(".cal-col.today .cblock.next >> text=23:55");
     });
 
-    await step("블록 누르기 → 이 날 쉬기 → 되살리기", async () => {
+    await step("블록 누르기 → 이번만 끄기 → 되살리기", async () => {
       await page.click(".cal-col.today .cblock.next");
       await shot("05-popover");
-      await page.click(".pop .ia >> text=이 날 쉬기");
+      await page.click(".pop .ia >> text=이번만 끄기");
       await page.waitForSelector(".cal-col.today .cblock.off");
       await page.click(".cal-col.today .cblock.off");
       await page.click(".pop .ia >> text=되살리기");
@@ -146,12 +165,15 @@ async function main() {
 
     await step("쉬는 날: 달력에서 기간 골라 추가 → 삭제", async () => {
       await page.click(".weekbar >> text=쉬는 날");
+      if (!(await page.locator("dialog >> button:has-text('추가')").isDisabled())) throw new Error("날을 고르기 전인데 추가가 눌립니다");
+      await page.click('dialog button[aria-label="다음 달"]');
       const days = page.locator("dialog .rc-day:not([disabled])");
       await days.nth(10).click();
       await days.nth(12).click();
       await page.fill('dialog input[aria-label="메모"]', "겨울 방학");
       await page.click("dialog >> button:has-text('추가')");
       await page.waitForSelector("dialog .off-chip >> text=겨울 방학");
+      await page.waitForSelector("dialog .rc-day.marked");
       await page.click('dialog .off-x[aria-label="삭제"]');
       await page.waitForSelector("dialog .off-chip", { state: "detached" });
       await page.click("dialog >> text=닫기");
@@ -191,14 +213,14 @@ async function main() {
       await page.click("dialog >> text=닫기");
     });
 
-    await step("지금 방송 → 다음 → 끄기", async () => {
+    await step("지금 방송 → 넘기기 → 정지", async () => {
       await page.click(".nav >> text=시간표");
       await page.click(".rail .ia >> text=지금");
       await page.waitForSelector(".card.liveC");
       await page.waitForSelector("#livepill:not([hidden])");
-      await page.click(".liveC .ia >> text=다음");
+      await page.click(".liveC .ia >> text=넘기기");
       await shot("07-onair");
-      await page.click(".liveC .ia >> text=끄기");
+      await page.click(".liveC .ia >> text=정지");
       await page.waitForSelector(".card.liveC", { state: "detached", timeout: 10000 });
     });
 
@@ -228,9 +250,34 @@ async function main() {
 
     await step("자동 방송 끄기 → 안내 띠 → 켜기", async () => {
       await page.click("#auto-switch");
+      if ((await page.getAttribute("#auto-switch", "aria-checked")) !== "false") throw new Error("누른 즉시 스위치가 바뀌지 않습니다");
       await page.waitForSelector(".banner >> text=자동 방송이 꺼져 있습니다");
       await page.click(".banner >> text=켜기");
       await page.waitForSelector(".banner >> text=자동 방송이 꺼져 있습니다", { state: "detached" });
+    });
+
+    await step("특정 날짜: 쉬는 날만 고르면 다음으로 못 감", async () => {
+      await page.click("#new-btn");
+      await page.fill(".wz-active input", "쉬는 날 방송");
+      await page.keyboard.press("Enter");
+      await page.click(".wz-tile >> text=음성");
+      await page.fill(".wz-active textarea", "안내합니다.");
+      await page.keyboard.press("Enter");
+      await page.click('.cp-item[aria-label="1번"]');
+      await page.keyboard.press("Enter");
+      await page.click(".wz-tile >> text=특정 날짜");
+      await page.click('.wz-active button[aria-label="다음 달"]');
+      const day = page.locator(".wz-active .rc-day:not([disabled])").nth(5);
+      const iso = await day.getAttribute("aria-label");
+      await page.evaluate((d) => fetch("/api/days-off", {
+        method: "POST", headers: { "Content-Type": "application/json", "X-Jeongsi-Client": "1" }, body: JSON.stringify({ start: d, end: d }),
+      }), iso);
+      await day.click();
+      await page.waitForSelector(".date-chip.off >> text=쉬는 날");
+      if (!(await page.locator("#wz-next").isDisabled())) throw new Error("방송이 나가지 않는 날만 골랐는데 다음이 눌립니다");
+      await shot("10-wizard-dayoff-date");
+      await page.click('button[aria-label="닫기"]');
+      await page.click("dialog >> text=그만하기");
     });
 
     if (errors.length) throw new Error(`콘솔 오류: ${errors.join(" | ")}`);

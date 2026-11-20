@@ -250,7 +250,7 @@ def create_app(services: Services) -> FastAPI:
         users = [sl.name for sl in config.slots if sl.program_id == program_id]
         users += [f"{o.date} 예외" for o in config.overrides if o.program_id == program_id]
         if users:
-            raise _bad(409, f"이 방송 구성을 쓰는 회차가 있어 지울 수 없습니다: {', '.join(users)}")
+            raise _bad(409, f"예약된 방송({', '.join(users)})이 이 구성을 써서 지울 수 없습니다. 시간표에서 그 방송을 먼저 지우세요.")
         update(lambda c: c.programs.pop(_index(c.programs, program_id, "방송 구성")))
         return Response(status_code=204)
 
@@ -286,21 +286,38 @@ def create_app(services: Services) -> FastAPI:
         update(mutate)
         return Response(status_code=204)
 
+    def _draft_slot(body: dict, program_id: str) -> Slot:
+        return Slot.model_validate({
+            "name": str(body.get("name") or "").strip() or "새 방송",
+            "time": body.get("time"),
+            "weekdays": body.get("weekdays") or [],
+            "dates": body.get("dates") or [],
+            "program_id": program_id,
+            "start_date": body.get("start_date"),
+            "end_date": body.get("end_date"),
+        })
+
+    def _date_states(slot: Slot) -> list[dict]:
+        from .schedule import date_state
+
+        config, now = cfg(), s.now()
+        return [{"date": d.isoformat(), "state": date_state(config, slot.time, d, now)} for d in sorted(slot.dates)]
+
+    @app.post("/api/broadcasts/check")
+    def check_broadcast(body: dict = Body(...)):
+        """만들기 전에 고른 날짜마다 실제로 나가는지 알려 준다(지난 시각·쉬는 날)."""
+        slot = _draft_slot(body, "draft")
+        return {"dates": _date_states(slot)}
+
     @app.post("/api/broadcasts", status_code=201)
     def create_broadcast(body: dict = Body(...)):
         """새 방송 만들기: 방송 구성과 회차를 한 번에 만든다. 둘 중 하나라도 잘못되면 아무것도 만들지 않는다."""
         name = str(body.get("name") or "").strip()
         program = Program.model_validate({"name": name, "steps": body.get("steps") or []})
         _check_files_exist(program)
-        slot = Slot.model_validate({
-            "name": name,
-            "time": body.get("time"),
-            "weekdays": body.get("weekdays") or [],
-            "dates": body.get("dates") or [],
-            "program_id": program.id,
-            "start_date": body.get("start_date"),
-            "end_date": body.get("end_date"),
-        })
+        slot = _draft_slot(body, program.id)
+        if slot.dates and not any(d["state"] == "ok" for d in _date_states(slot)):
+            raise _bad(422, "고른 날짜에는 나갈 방송이 없습니다. 지났거나 쉬는 날입니다.")
 
         def mutate(c: Config):
             c.programs.append(program)
@@ -327,7 +344,13 @@ def create_app(services: Services) -> FastAPI:
     def add_day_off(body: dict = Body(...)):
         body.pop("id", None)
         day_off = DayOff.model_validate(body)
-        update(lambda c: c.days_off.append(day_off))
+
+        def mutate(c: Config):
+            if any(d.start <= day_off.start and day_off.end <= d.end for d in c.days_off):
+                raise _bad(409, "이미 쉬는 날입니다.")
+            c.days_off.append(day_off)
+
+        update(mutate)
         return day_off.model_dump(mode="json")
 
     @app.delete("/api/days-off/{day_off_id}", status_code=204)

@@ -191,6 +191,26 @@ def test_upload_sanitizes_name(env):
     assert (services.media.directory / name).exists()
 
 
+def test_upload_same_file_twice_reuses_it(env):
+    # Arrange
+    client, services, _ = env
+    data = wav_bytes()
+    first = client.post("/api/media", files={"file": ("bell.wav", data, "audio/wav")}, headers=HEADERS).json()["name"]
+    # Act
+    second = client.post("/api/media", files={"file": ("bell.wav", data, "audio/wav")}, headers=HEADERS)
+    # Assert
+    assert second.status_code == 201 and second.json()["name"] == first
+    assert len(list(services.media.directory.glob("*-bell.wav"))) == 1
+
+
+def test_upload_same_name_different_content_is_kept_separately(env):
+    client, services, _ = env
+    client.post("/api/media", files={"file": ("bell.wav", wav_bytes(0.5), "audio/wav")}, headers=HEADERS)
+    client.post("/api/media", files={"file": ("bell.wav", wav_bytes(0.25), "audio/wav")}, headers=HEADERS)
+    assert len(list(services.media.directory.glob("*-bell.wav"))) == 2
+    assert not list(services.media.directory.glob("*.part"))
+
+
 def test_upload_rejects_unplayable_file(env):
     client, _, _ = env
     res = client.post("/api/media", files={"file": ("broken.wav", b"not audio", "audio/wav")}, headers=HEADERS)
@@ -346,3 +366,53 @@ def test_create_broadcast_on_specific_dates(env):
     assert res.json()["next"] == {"date": "2026-11-21", "time": "10:00"}
     week = client.get("/api/week?start=2026-11-16").json()
     assert [d["label"] for d in week["days"]][-1] == "토"
+
+
+def test_check_broadcast_marks_past_and_day_off_dates(env):
+    # Arrange: NOW = 2026-11-20 11:18, 11/25을 쉬는 날로
+    client, _, _ = env
+    client.post("/api/days-off", json={"start": "2026-11-25", "end": "2026-11-25", "memo": "행사"}, headers=HEADERS)
+    body = {"time": "09:00", "dates": ["2026-11-25", "2026-11-20", "2026-11-21"]}
+    # Act
+    res = client.post("/api/broadcasts/check", json=body, headers=HEADERS)
+    # Assert
+    assert res.status_code == 200
+    assert res.json()["dates"] == [
+        {"date": "2026-11-20", "state": "past"},
+        {"date": "2026-11-21", "state": "ok"},
+        {"date": "2026-11-25", "state": "off"},
+    ]
+
+
+def test_check_broadcast_today_later_time_is_ok(env):
+    client, _, _ = env
+    res = client.post("/api/broadcasts/check", json={"time": "11:19", "dates": ["2026-11-20"]}, headers=HEADERS)
+    assert res.json()["dates"] == [{"date": "2026-11-20", "state": "ok"}]
+
+
+def test_create_broadcast_refuses_dates_that_never_air(env):
+    # Arrange: 오늘 지난 시각 + 쉬는 날만 고름
+    client, services, _ = env
+    client.post("/api/days-off", json={"start": "2026-11-25", "end": "2026-11-25"}, headers=HEADERS)
+    body = {"name": "행사", "steps": [{"kind": "tts", "text": "안내"}], "time": "09:00", "dates": ["2026-11-20", "2026-11-25"]}
+    before = len(services.store.config.slots)
+    # Act
+    res = client.post("/api/broadcasts", json=body, headers=HEADERS)
+    # Assert
+    assert res.status_code == 422 and "나갈 방송이 없습니다" in res.json()["error"]
+    assert len(services.store.config.slots) == before
+
+
+def test_day_off_already_covered_is_refused(env):
+    # Arrange: 11/23~11/27 쉬는 날
+    client, services, _ = env
+    client.post("/api/days-off", json={"start": "2026-11-23", "end": "2026-11-27"}, headers=HEADERS)
+    # Act: 같은 기간, 안에 든 하루
+    same = client.post("/api/days-off", json={"start": "2026-11-23", "end": "2026-11-27"}, headers=HEADERS)
+    inside = client.post("/api/days-off", json={"start": "2026-11-25", "end": "2026-11-25"}, headers=HEADERS)
+    wider = client.post("/api/days-off", json={"start": "2026-11-27", "end": "2026-11-28"}, headers=HEADERS)
+    # Assert: 겹치기만 하면 허용(새 날이 늘어남)
+    assert same.status_code == 409 and "이미 쉬는 날" in same.json()["error"]
+    assert inside.status_code == 409
+    assert wider.status_code == 201
+    assert len(services.store.config.days_off) == 2

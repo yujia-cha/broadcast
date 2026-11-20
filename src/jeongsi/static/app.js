@@ -79,8 +79,7 @@ function renderChrome(status) {
   pill.hidden = !onAir;
   if (onAir) document.getElementById("livepill-text").textContent = `방송 중 · ${runner.name}`;
 
-  const sw = document.getElementById("auto-switch");
-  sw.setAttribute("aria-checked", String(status.auto_broadcast));
+  if (!autoBusy) document.getElementById("auto-switch").setAttribute("aria-checked", String(status.auto_broadcast));
 
   const btn = document.getElementById("update-btn");
   const upd = status.update;
@@ -126,13 +125,28 @@ function renderBanners(status) {
   el.replaceChildren(...items);
 }
 
+let autoBusy = false;
 async function toggleAuto() {
-  const next = !ctx.status?.auto_broadcast;
+  if (autoBusy || !ctx.status) return; // 요청 중에 또 누르면 무시(이전 상태로 다음 값을 계산하지 않게)
+  autoBusy = true;
+  const sw = document.getElementById("auto-switch");
+  const before = ctx.status.auto_broadcast;
+  const next = !before;
+  ctx.status.auto_broadcast = next; // 누르자마자 모양을 바꾼다
+  sw.setAttribute("aria-checked", String(next));
+  sw.setAttribute("aria-busy", "true");
+  renderBanners(ctx.status);
   try {
     await patch("/api/settings", { auto_broadcast: next });
     toast(next ? "자동 방송을 켰습니다." : "자동 방송을 껐습니다. 예약한 방송이 나가지 않습니다.");
   } catch (err) {
+    ctx.status.auto_broadcast = before;
+    sw.setAttribute("aria-checked", String(before));
+    renderBanners(ctx.status);
     toastError(err);
+  } finally {
+    autoBusy = false;
+    sw.removeAttribute("aria-busy");
   }
 }
 
@@ -204,6 +218,7 @@ async function start() {
     btn.addEventListener("click", () => navigate(btn.dataset.view));
   }
   document.getElementById("auto-switch").addEventListener("click", toggleAuto);
+  document.getElementById("livepill").addEventListener("click", () => navigate("timetable"));
   document.getElementById("new-btn").addEventListener("click", () => navigate("new"));
   document.getElementById("update-btn").addEventListener("click", openUpdateDialog);
   window.jeongsiOpenUpdate = openUpdateDialog; // 트레이 메뉴의 "새 버전 설치"에서 부른다

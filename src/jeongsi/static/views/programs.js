@@ -2,7 +2,7 @@
 // 블록을 끌어 순서를 바꾸고, 누르면 아래에서 그 블록을 고친다.
 import { api, del, post, put } from "../api.js";
 import { confirmDialog, fmtDuration, h, icon, openDialog, toast, toastError } from "../ui.js";
-import { countPicker, iconAction, strip } from "../visual.js";
+import { countPicker, iconAction, mediaPicker, strip } from "../visual.js";
 
 const TTS_CHARS_PER_SECOND = 7;
 const SPEEDS = [[0.8, "느리게"], [1.0, "보통"], [1.25, "빠르게"]];
@@ -141,6 +141,7 @@ function blockTrack(d) {
         },
       },
     },
+      h("span", { class: "tblk-grip", "aria-hidden": "true" }, icon("grip")),
       h("span", { class: "tblk-i" }, icon(step.kind === "tts" ? "speech" : "music")),
       h("span", { class: "tblk-l" }, step.kind === "tts" ? (step.text.trim().slice(0, 12) || "음성") : (mediaName(step.file).replace(/\.[^.]+$/, "") || "음악")),
       step.repeat > 1 ? h("b", { class: "tblk-n" }, `×${step.repeat}`) : null,
@@ -195,16 +196,12 @@ function ttsBody(step) {
 
 function audioBody(step) {
   const input = h("input", { type: "file", accept: ".mp3,.wav,.flac,.ogg,audio/*", hidden: true, on: { change: () => upload(input, step) } });
-  const longest = Math.max(1, ...ctx.media.map((m) => m.seconds || 0));
-  return h("div", { class: "wz-files", role: "radiogroup", "aria-label": "음악 파일" },
-    ctx.media.map((m) =>
-      h("button", { class: "wz-file", role: "radio", "aria-checked": String(step.file === m.name), on: { click: () => { step.file = m.name; step.label = m.display.replace(/\.[^.]+$/, "").slice(0, 20); renderEditor(); } } },
-        h("span", { class: "wz-file-i blk-audio" }, icon("music")),
-        h("span", { class: "wz-file-n" }, m.display),
-        h("span", { class: "wz-file-len" }, h("i", { style: { width: `${Math.max(6, ((m.seconds || 0) / longest) * 100)}%` } })),
-        h("small", null, m.seconds ? fmtDuration(m.seconds) : ""))),
-    h("button", { class: "wz-file wz-upload", "data-upload": step.id, on: { click: () => input.click() } }, h("span", { class: "wz-file-i" }, icon("upload")), h("span", null, "파일 올리기")),
-    input);
+  return mediaPicker({
+    media: ctx.media, selected: step.file, collapse: true,
+    upload: h("div", null, h("button", { class: "wz-file wz-upload", "data-upload": step.id, on: { click: () => input.click() } }, h("span", { class: "wz-file-i" }, icon("upload")), h("span", null, "파일 올리기")), input),
+    onPick: (m) => { step.file = m.name; step.label = m.display.replace(/\.[^.]+$/, "").slice(0, 20); renderEditor(); },
+    onPreview: (m) => post("/api/preview", { kind: "audio", file: m.name }).then(() => toast(`${m.display} 듣는 중…`)).catch(toastError),
+  });
 }
 
 function estimate(step) {
@@ -318,7 +315,7 @@ async function save() {
 
 async function removeProgram(program) {
   if (program?.used_by?.length) {
-    st.errorMessage = `쓰는 회차가 있어 지울 수 없습니다: ${program.used_by.join(", ")}`;
+    st.errorMessage = `예약된 방송(${program.used_by.join(", ")})이 이 구성을 써서 지울 수 없어요. 시간표에서 그 방송을 먼저 지우세요.`;
     return renderEditor();
   }
   const ok = await confirmDialog({ title: `'${program.name}' 지우기`, confirm: "지우기", danger: true });

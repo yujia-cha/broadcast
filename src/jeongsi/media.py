@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import threading
 import uuid
 from collections.abc import Callable
+from glob import escape as glob_escape
 from pathlib import Path
 from typing import BinaryIO
 
@@ -71,6 +73,8 @@ class MediaLibrary:
                     out.write(chunk)
             if size == 0:
                 raise MediaError("빈 파일입니다.")
+            if same := self._same_file(filename, partial):
+                return same  # 같은 파일을 또 올리면 사본을 만들지 않는다
             partial.replace(target)
         finally:
             partial.unlink(missing_ok=True)
@@ -79,7 +83,27 @@ class MediaLibrary:
             raise MediaError("재생할 수 없는 파일입니다. 다른 파일을 골라 주세요.")
         return stored
 
+    def _same_file(self, filename: str, candidate: Path) -> str | None:
+        """이름과 내용이 같은 파일이 이미 있으면 그 저장 이름."""
+        size = candidate.stat().st_size
+        digest = None
+        for existing in self.directory.glob(f"*-{glob_escape(filename)}"):
+            if existing.name.split("-", 1)[1] != filename or existing.stat().st_size != size:
+                continue
+            digest = digest or _sha256(candidate)
+            if _sha256(existing) == digest:
+                return existing.name
+        return None
+
     def delete(self, name: str) -> None:
         if not is_safe_media_name(name):
             raise MediaError("파일 이름이 올바르지 않습니다.")
         (self.directory / name).unlink(missing_ok=True)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()

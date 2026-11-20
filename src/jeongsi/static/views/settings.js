@@ -31,7 +31,7 @@ async function save(changes, savedEl) {
     settings = await patch("/api/settings", changes);
     if (savedEl) {
       savedEl.textContent = "저장됨";
-      setTimeout(() => (savedEl.textContent = ""), 1800);
+      setTimeout(() => (savedEl.textContent = ""), 3000);
     }
     return true;
   } catch (err) {
@@ -126,9 +126,7 @@ function render() {
               h("option", { value: "", selected: !s.default_voice }, "Windows 기본 음성"),
               voices.map((v) => h("option", { value: v.id, selected: v.id === s.default_voice }, `${v.name}${v.korean ? "" : " (한국어 아님)"}`)),
             )),
-          h("label", { class: "field" }, h("span", null, "기본 속도"),
-            h("select", { class: "input", style: { maxWidth: "160px" }, on: { change: (e) => save({ default_rate: Number(e.target.value) }, rateSaved) } },
-              [0.75, 0.9, 1.0, 1.1, 1.25, 1.5].map((r) => h("option", { value: r, selected: r === s.default_rate }, `${r}×`)))),
+          h("div", { class: "field" }, h("span", { id: "rate-l" }, "기본 속도"), rateChips(s.default_rate, rateSaved)),
           h("div", { class: "step-row" },
             h("button", { class: "btn sm", on: { click: () => post("/api/preview", { kind: "tts", text: "안녕하세요. 정시 방송 음성 시험입니다.", voice: settings.default_voice, rate: settings.default_rate }).catch(toastError) } }, "미리듣기"),
             rateSaved,
@@ -239,4 +237,16 @@ async function resetDefaults() {
   } catch (err) {
     toastError(err);
   }
+}
+
+// 속도: 방송 구성 화면과 같은 세 칩
+const SPEEDS = [[0.8, "느리게"], [1.0, "보통"], [1.25, "빠르게"]];
+function rateChips(value, savedEl) {
+  const row = h("div", { class: "step-row", role: "radiogroup", "aria-labelledby": "rate-l" });
+  const paint = (current) => row.replaceChildren(...SPEEDS.map(([r, label]) =>
+    h("button", { class: "chip-btn", role: "radio", "aria-checked": String(current === r), "aria-pressed": String(current === r), on: { click: async () => {
+      if (await save({ default_rate: r }, savedEl)) paint(r);
+    } } }, label)));
+  paint(value);
+  return row;
 }

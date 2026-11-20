@@ -9,7 +9,8 @@ import {
 } from "../visual.js";
 
 const SNAP = 5;
-const MIN_HOUR_PX = 28;
+const MIN_HOUR_PX = 44; // 이보다 좁으면 블록 이름이 사라지므로 대신 스크롤한다
+const DRAG_START_PX = 10; // 누르다 손이 조금 흔들려도 시각이 바뀌지 않게
 const MAX_HOUR_PX = 64;
 const BLOCK_PX = 46;
 const blockPx = () => Math.max(26, Math.min(BLOCK_PX, st.hourPx - 4)); // 간격이 좁으면 블록도 낮춘다
@@ -29,6 +30,7 @@ export function mount(el, appCtx) {
   nowEl = h("div");
   el.replaceChildren(h("div", { class: "tt-page" }, mainEl, h("aside", { class: "rail", "aria-label": "지금" }, nowEl)));
   st.weekKey = weekKey(ctx.status);
+  st.scrolled = false;
   loadWeek();
   renderNow();
 }
@@ -156,6 +158,11 @@ function renderGrid() {
 
   const body = h("div", { class: "cal-body", style: { gridTemplateColumns: cols } }, axis, columns);
   mainEl.replaceChildren(bar, h("div", { class: "cal" }, head, body));
+  if (!st.scrolled) {
+    // 처음 열 때 다음 방송(없으면 지금 선)이 보이게 한다
+    st.scrolled = true;
+    (mainEl.querySelector(".cblock.next, .cblock.live") || mainEl.querySelector(".cal-now"))?.scrollIntoView({ block: "nearest" });
+  }
 }
 
 function block(row, cell, from, index, count) {
@@ -191,7 +198,7 @@ function enableDrag(el, row, cell) {
   el.addEventListener("pointermove", (e) => {
     if (!el.hasPointerCapture(e.pointerId)) return;
     const dy = e.clientY - startY;
-    if (!moved && Math.abs(dy) < 4) return;
+    if (!moved && Math.abs(dy) < DRAG_START_PX) return;
     if (!moved) {
       moved = true;
       st.dragging = true;
@@ -211,21 +218,24 @@ function enableDrag(el, row, cell) {
     if (!moved) return blockPopover(el, row, cell);
     st.dragging = false;
     if (current === startMin) return renderGrid();
-    await moveTime(row, cell, toHHMM(current));
+    await moveTime(row, cell, toHHMM(current), true);
   });
   el.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); blockPopover(el, row, cell); }
   });
 }
 
-async function moveTime(row, cell, hhmm) {
+async function moveTime(row, cell, hhmm, undoable = false) {
   try {
     if (hhmm === cell.original_time && cell.program_id === row.slot.program_id) {
       if (cell.override) await del(`/api/overrides/${cell.date}/${row.slot.id}`);
     } else {
       await put("/api/overrides", { date: cell.date, slot_id: row.slot.id, action: "change", time: hhmm, program_id: cell.program_id });
     }
-    await refresh(`${fmtDate(cell.date)} ${row.slot.name} → ${hhmm}`);
+    closePopover();
+    await loadWeek();
+    const undo = { label: "되돌리기", fn: () => moveTime(row, { ...cell, override: cell.override ?? { action: "change" } }, cell.time) };
+    toast(`${fmtDate(cell.date)} ${row.slot.name} ${cell.time} → ${hhmm}`, undoable ? { action: undo } : {});
   } catch (err) {
     toastError(err);
     renderGrid();
@@ -242,8 +252,8 @@ function blockPopover(anchor, row, cell) {
   if (program) actions.push(iconAction("play", "지금", () => broadcastNow(program.id)));
   if (!past) {
     if (offByOverride) actions.push(iconAction("undo", "되살리기", () => clearOverride(row, cell, "다시 방송합니다.")));
-    else if (offByDay) actions.push(iconAction("check", "이 회차만", () => setOverride(row, cell, { action: "change", time: cell.time }, "이 회차만 방송합니다.")));
-    else actions.push(iconAction("ban", "이 날 쉬기", () => setOverride(row, cell, { action: "skip" }, `${fmtDate(cell.date)} 쉽니다.`)));
+    else if (offByDay) actions.push(iconAction("check", "이번만 켜기", () => setOverride(row, cell, { action: "change", time: cell.time }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}만 방송합니다.`)));
+    else actions.push(iconAction("ban", "이번만 끄기", () => setOverride(row, cell, { action: "skip" }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name} 끔`)));
     if (!offByOverride) actions.push(iconAction("clock", "시각", () => timeEditor(anchor, row, cell)));
     if (cell.changed) actions.push(iconAction("undo", "원래대로", () => clearOverride(row, cell, "원래대로 돌렸습니다.")));
   }
@@ -336,8 +346,8 @@ function liveCard(r) {
     h("span", { class: "nm" }, r.name),
     strip(plays, { size: "lg", index, ratio: cur?.seconds ? curElapsed / cur.seconds : 0, expanded: false }),
     h("div", { class: "ia-row" },
-      tag(iconAction("skip", "다음", skipStep, { disabled: r.state !== "playing" }), "skip"),
-      tag(iconAction("stop", "끄기", stopBroadcast, { tone: "stop", disabled: r.state === "restoring" }), "stop"),
+      tag(iconAction("skip", "넘기기", skipStep, { disabled: r.state !== "playing" }), "skip"),
+      tag(iconAction("stop", "정지", stopBroadcast, { tone: "stop", disabled: r.state === "restoring" }), "stop"),
     ),
   );
 }
@@ -345,7 +355,10 @@ function liveCard(r) {
 function nextCard(status) {
   const n = status.next;
   const skip = st.lastSkip && Date.now() - st.lastSkip.at < 60000 ? st.lastSkip : null;
-  const ruler = dayRuler(todayCells().map((c) => c.time), nowMinutes(), n?.date === todayIso() ? n.time : null);
+  const times = todayCells().map((c) => c.time);
+  const ruler = times.length
+    ? h("div", { class: "ruler-box" }, h("small", { class: "ruler-cap" }, `오늘 방송 ${times.length}회`), dayRuler(times, nowMinutes(), n?.date === todayIso() ? n.time : null))
+    : null;
   if (!n) {
     return h("section", { class: "card" }, ruler,
       h("div", { class: "next-empty" }, icon(status.auto_broadcast ? "moon" : "ban"), h("span", null, status.auto_broadcast ? "예정 없음" : "자동 방송 꺼짐")),
@@ -391,7 +404,7 @@ async function broadcastNow(programId) {
 async function stopBroadcast() {
   try {
     await post("/api/broadcast/stop");
-    toast("방송을 껐습니다.");
+    toast("방송을 멈췄습니다.");
   } catch (err) {
     toastError(err);
   }
@@ -436,7 +449,8 @@ async function undoSkip() {
 export function openSlotDialog(slot) {
   const draft = { ...slot, weekdays: [...slot.weekdays], dates: [...(slot.dates || [])] };
   let mode = draft.dates.length ? "dates" : "weekly";
-  let nameEl, progEl, errEl, startEl, endEl, enabledEl, confirmBox, whenBox, modeBox;
+  let nameEl, progEl, errEl, enabledEl, confirmBox, whenBox, modeBox;
+  let periodOpen = false;
   let overlapConfirmed = null;
   const paintWhen = () => {
     modeBox.replaceChildren(...[["weekly", "매주"], ["dates", "특정 날짜"]].map(([v, label]) =>
@@ -444,11 +458,30 @@ export function openSlotDialog(slot) {
     whenBox.replaceChildren(mode === "weekly"
       ? h("div", { class: "wz-stack" },
           weekdayPicker(draft.weekdays, (v) => (draft.weekdays = v)),
-          h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s3)" } },
-            h("label", { class: "field" }, h("span", null, "시작일"), (startEl = h("input", { class: "input", type: "date", value: draft.start_date || "" }))),
-            h("label", { class: "field" }, h("span", null, "종료일"), (endEl = h("input", { class: "input", type: "date", value: draft.end_date || "" })))))
+          periodField())
       : multiDateCalendar({ dates: draft.dates, min: addDays(todayIso(), -365) }, (v) => (draft.dates = v)));
   };
+  // 기간: 평소에는 한 줄 요약, 누르면 달력(끝 없음 ∞). 달력을 고르는 동안에는 요약만 바꾼다
+  function periodField() {
+    const today = todayIso();
+    const text = h("span");
+    const paintSummary = () => {
+      text.textContent = draft.start_date || draft.end_date
+        ? `${draft.start_date ? fmtMonthDay(draft.start_date) : "지금"}부터 ${draft.end_date ? `${fmtMonthDay(draft.end_date)}까지` : "계속"}`
+        : "지금부터 계속";
+    };
+    paintSummary();
+    return h("div", { class: "period" },
+      h("button", { type: "button", class: "chip-btn", "aria-expanded": String(periodOpen), on: { click: () => { periodOpen = !periodOpen; paintWhen(); } } },
+        icon("calendar"), text, icon(periodOpen ? "up" : "down")),
+      draft.start_date || draft.end_date ? h("button", { type: "button", class: "link", on: { click: () => { draft.start_date = null; draft.end_date = null; paintWhen(); } } }, "기간 없애기") : null,
+      periodOpen ? rangeCalendar({
+        start: draft.start_date || today, end: draft.end_date,
+        min: draft.start_date && draft.start_date < today ? draft.start_date : today, allowOpen: true,
+      }, (v) => { draft.start_date = v.start; draft.end_date = v.end; paintSummary(); }) : null,
+    );
+  }
+
   const { close } = openDialog("방송 편집", (close) =>
     h("form", { class: "dlg", on: { submit: (e) => { e.preventDefault(); save(); } } },
       (nameEl = h("input", { class: "input pg-name", value: draft.name, maxlength: 40, "aria-label": "이름", required: true })),
@@ -476,7 +509,7 @@ export function openSlotDialog(slot) {
     const body = {
       name: nameEl.value.trim(), time: draft.time, program_id: progEl.value, enabled: enabledEl.checked,
       weekdays: weekly ? draft.weekdays : [], dates: weekly ? [] : draft.dates,
-      start_date: weekly ? startEl.value || null : null, end_date: weekly ? endEl.value || null : null,
+      start_date: weekly ? draft.start_date || null : null, end_date: weekly ? draft.end_date || null : null,
     };
     if (!body.name) return (errEl.textContent = "이름을 입력하세요.");
     if (weekly && !body.weekdays.length) return (errEl.textContent = "요일을 하나 이상 고르세요.");
@@ -510,19 +543,32 @@ export function openSlotDialog(slot) {
   }
 }
 
-// 쉬는 날: 달력에서 기간 고르기 ----------------------------------------------------------------
+// 쉬는 날: 달력에서 기간 고르기. 이미 쉬는 날은 빗금, 처음엔 아무 날도 고르지 않는다 -----------------------
 async function openDaysOffDialog(prefill) {
-  let list, memoEl, errEl;
-  let range = { start: prefill || todayIso(), end: prefill || todayIso() };
+  let list, memoEl, errEl, calBox, addBtn;
+  let items = [];
+  let range = prefill ? { start: prefill, end: prefill } : { start: null, end: null };
+  let view = prefill; // 추가한 뒤에도 보던 달을 그대로 보여 준다
+  const marked = () => {
+    const map = new Map();
+    for (const d of items) for (let x = d.start; x <= d.end; x = addDays(x, 1)) map.set(x, d.memo || "쉬는 날");
+    return map;
+  };
+  const paintCalendar = () => {
+    calBox.replaceChildren(rangeCalendar({ start: range.start, end: range.end, min: todayIso(), allowOpen: false, marked: marked(), view },
+      (v) => { range = { start: v.start, end: v.end || v.start }; view = v.start; addBtn.disabled = !range.start; }));
+    addBtn.disabled = !range.start;
+  };
   const paint = async () => {
     try {
-      const items = await get("/api/days-off");
+      items = await get("/api/days-off");
       list.replaceChildren(...items.map((d) =>
         h("span", { class: "off-chip" }, icon("ban"),
           `${fmtMonthDay(d.start)}${d.start === d.end ? "" : `~${fmtMonthDay(d.end)}`}${d.memo ? ` ${d.memo}` : ""}`,
           h("button", { class: "off-x", "aria-label": "삭제", on: { click: async () => {
             try { await del(`/api/days-off/${d.id}`); await paint(); await loadWeek(); } catch (err) { errEl.textContent = err.message; }
           } } }, icon("x")))));
+      paintCalendar();
     } catch (err) {
       errEl.textContent = err.message;
     }
@@ -531,23 +577,24 @@ async function openDaysOffDialog(prefill) {
     h("div", { class: "dlg" },
       h("h2", null, "쉬는 날"),
       (list = h("div", { class: "off-list" })),
-      rangeCalendar({ start: range.start, end: range.end, min: addDays(todayIso(), -365), allowOpen: false }, (v) => (range = { start: v.start, end: v.end || v.start })),
+      (calBox = h("div")),
       (memoEl = h("input", { class: "input", maxlength: 60, placeholder: "메모 (예: 겨울 방학)", "aria-label": "메모" })),
       (errEl = h("p", { class: "err", role: "alert" })),
       h("div", { class: "dlg-foot" },
         h("button", { class: "btn", on: { click: () => close() } }, "닫기"),
-        h("button", { class: "btn pri", on: { click: async () => {
+        (addBtn = h("button", { class: "btn pri", disabled: true, on: { click: async () => {
           errEl.textContent = "";
           try {
             await post("/api/days-off", { start: range.start, end: range.end, memo: memoEl.value.trim() });
             memoEl.value = "";
+            range = { start: null, end: null };
             await paint();
             await loadWeek();
             toast("쉬는 날을 추가했습니다.");
           } catch (err) {
             errEl.textContent = err.message;
           }
-        } } }, icon("plus"), "추가"),
+        } } }, icon("plus"), "추가")),
       ),
     ));
   await paint();

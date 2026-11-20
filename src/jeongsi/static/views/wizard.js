@@ -1,14 +1,14 @@
 // 새 방송 만들기: 질문 하나씩, 그림을 눌러 답한다. 답하면 다음 칸이 위에 나타나고 답한 칸은 아래에 쌓인다.
 // 마지막에 티켓 모양 요약을 확인하면 방송 구성과 회차를 한 번에 만든다.
 import { api, get, post } from "../api.js";
-import { confirmDialog, fmtDate, fmtDuration, h, icon, toast, toastError, weekdaySummary } from "../ui.js";
-import { countPicker, dateChips, dayDots, multiDateCalendar, strip, timePicker, weekdayPicker } from "../visual.js";
+import { confirmDialog, fmtDate, h, icon, toast, toastError, weekdaySummary } from "../ui.js";
+import { countPicker, dateChips, dayDots, mediaPicker, multiDateCalendar, strip, timePicker, weekdayPicker } from "../visual.js";
 
 let ctx, root, st;
 
 function freshState() {
   return {
-    draft: { name: "", content: null, text: "", ttsRepeat: null, file: null, audioRepeat: null, time: "", mode: null, weekdays: [], dates: [], agreed: false },
+    draft: { name: "", content: null, text: "", ttsRepeat: 1, file: null, audioRepeat: 1, time: "", mode: null, weekdays: [], dates: [], dateStates: {}, agreed: false },
     current: "name",
     answered: new Set(),
     result: null,
@@ -22,19 +22,21 @@ const stripOf = (d) => [
   ...(d.content && d.content !== "audio" ? [{ kind: "tts", repeat: d.ttsRepeat || 1 }] : []),
   ...(d.content && d.content !== "tts" ? [{ kind: "audio", repeat: d.audioRepeat || 1 }] : []),
 ];
-const whenPicture = (d) => (d.mode === "dates" ? dateChips(d.dates) : dayDots(d.weekdays));
+const whenPicture = (d) => (d.mode === "dates" ? dateChips(d.dates, 4, d.dateStates) : dayDots(d.weekdays));
+const airingDates = (d) => d.dates.filter((x) => (d.dateStates[x] ?? "ok") === "ok");
+const countAnswer = (kind, n) => h("span", { class: "wz-count" }, strip([{ kind, repeat: n }], { size: "sm" }), h("b", null, `${n}번`));
 
 const STEPS = [
   { id: "name", icon: "edit", title: "방송 이름", valid: (d) => d.name.trim().length > 0, show_: (d) => d.name.trim(), render: nameField },
   { id: "content", icon: "volume", title: "무엇을 내보낼까요?", valid: (d) => !!d.content, show_: (d) => strip(stripOf({ ...d, ttsRepeat: 1, audioRepeat: 1 }), { size: "sm" }), render: contentField },
   { id: "text", icon: "speech", when: (d) => d.content !== "audio", title: "읽어 줄 문구", valid: (d) => d.text.trim().length > 0, show_: (d) => d.text.trim(), render: textField },
-  { id: "ttsRepeat", icon: "speech", when: (d) => d.content !== "audio", title: "몇 번 읽을까요?", valid: (d) => !!d.ttsRepeat, show_: (d) => strip([{ kind: "tts", repeat: d.ttsRepeat }], { size: "sm" }), render: (d) => countPicker("tts", d.ttsRepeat, (n) => { d.ttsRepeat = n; next(); }) },
+  { id: "ttsRepeat", icon: "speech", when: (d) => d.content !== "audio", title: "몇 번 읽을까요?", valid: (d) => !!d.ttsRepeat, show_: (d) => countAnswer("tts", d.ttsRepeat), render: (d) => countPicker("tts", d.ttsRepeat, (n) => { d.ttsRepeat = n; next(); }) },
   { id: "file", icon: "music", when: (d) => d.content !== "tts", title: "어떤 음악?", valid: (d) => !!media(d.file), show_: (d) => media(d.file)?.display, render: fileField },
-  { id: "audioRepeat", icon: "music", when: (d) => d.content !== "tts", title: "몇 번 틀까요?", valid: (d) => !!d.audioRepeat, show_: (d) => strip([{ kind: "audio", repeat: d.audioRepeat }], { size: "sm" }), render: (d) => countPicker("audio", d.audioRepeat, (n) => { d.audioRepeat = n; next(); }) },
+  { id: "audioRepeat", icon: "music", when: (d) => d.content !== "tts", title: "몇 번 틀까요?", valid: (d) => !!d.audioRepeat, show_: (d) => countAnswer("audio", d.audioRepeat), render: (d) => countPicker("audio", d.audioRepeat, (n) => { d.audioRepeat = n; next(); }) },
   { id: "time", icon: "clock", title: "몇 시에?", valid: (d) => /^\d\d:\d\d$/.test(d.time), show_: (d) => d.time, render: timeField },
-  { id: "mode", icon: "calendarOff", title: "어떻게 반복할까요?", valid: (d) => !!d.mode, show_: (d) => (d.mode === "dates" ? "특정 날짜" : "매주"), render: modeField },
-  { id: "days", icon: "calendarOff", when: (d) => d.mode !== "dates", title: "무슨 요일마다?", valid: (d) => d.weekdays.length > 0, show_: (d) => dayDots(d.weekdays), render: daysField },
-  { id: "dates", icon: "calendarOff", when: (d) => d.mode === "dates", title: "어느 날짜에?", valid: (d) => d.dates.length > 0, show_: (d) => dateChips(d.dates), render: datesField },
+  { id: "mode", icon: "calendar", title: "어떻게 반복할까요?", valid: (d) => !!d.mode, show_: (d) => (d.mode === "dates" ? "특정 날짜" : "매주"), render: modeField },
+  { id: "days", icon: "calendar", when: (d) => d.mode !== "dates", title: "무슨 요일마다?", valid: (d) => d.weekdays.length > 0, show_: (d) => dayDots(d.weekdays), render: daysField },
+  { id: "dates", icon: "calendar", when: (d) => d.mode === "dates", title: "어느 날짜에?", valid: (d) => airingDates(d).length > 0, show_: (d) => dateChips(d.dates, 4, d.dateStates), render: datesField },
 ];
 
 const visibleSteps = () => STEPS.filter((s) => !s.when || s.when(st.draft));
@@ -70,6 +72,7 @@ function next() {
   const pending = after.find((s) => !st.answered.has(s.id) || !s.valid(st.draft)) ?? steps.find((s) => !s.valid(st.draft));
   st.current = pending ? pending.id : "confirm";
   render(true);
+  if (st.current === "confirm") checkDates(st.draft, null);
 }
 
 function goTo(id) {
@@ -93,11 +96,20 @@ function toBody(d) {
     name: d.name.trim(), steps, time: d.time,
     weekdays: d.mode === "dates" ? [] : d.weekdays,
     dates: d.mode === "dates" ? d.dates : [],
+    start_date: d.mode === "dates" ? null : today(),
   };
 }
 
 async function create() {
-  if (st.busy || !st.draft.agreed) return;
+  if (st.busy) return;
+  if (!st.draft.agreed) {
+    const box = root.querySelector(".wz-agree");
+    box?.classList.remove("nudge");
+    void box?.offsetWidth; // 애니메이션 다시 시작
+    box?.classList.add("nudge");
+    root.querySelector("#wz-agree")?.focus();
+    return;
+  }
   st.busy = true;
   render();
   try {
@@ -123,15 +135,14 @@ function render(focus = false) {
   const field = confirming ? ticket(st.draft, true) : cur.render(st.draft); // 칸이 기본값을 정할 수 있어 먼저 그린다
 
   const primary = confirming
-    ? h("button", { class: "btn pri wz-cta", disabled: !st.draft.agreed || st.busy, on: { click: create } }, st.busy ? "만드는 중…" : "만들기")
+    ? h("button", { class: `btn pri wz-cta${st.draft.agreed ? "" : " soft"}`, disabled: st.busy || !canCreate(st.draft), on: { click: create } }, st.busy ? "만드는 중…" : "만들기")
     : h("button", { class: "btn pri wz-cta", id: "wz-next", disabled: !cur.valid(st.draft), on: { click: next } }, "다음");
 
   const answered = confirming ? [] : steps
     .filter((s) => s.id !== st.current && st.answered.has(s.id) && s.valid(st.draft))
-    .reverse()
     .map((s) => answerChip(s, () => goTo(s.id)));
 
-  root.replaceChildren(h("div", { class: "wz" },
+  root.replaceChildren(h("div", { class: "wz", on: { keydown: (e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); ctx.go("timetable"); } } } },
     h("div", { class: "wz-top" },
       h("button", { class: "ibtn", "aria-label": "이전", on: { click: back } }, icon("left")),
       h("div", { class: "wz-progress", role: "progressbar", "aria-valuemin": 0, "aria-valuemax": steps.length, "aria-valuenow": index },
@@ -177,11 +188,15 @@ function onEnter(e) {
   }
 }
 
+const NAME_MAX = 40;
 function nameField(d) {
-  return h("input", {
-    class: "input wz-input", value: d.name, maxlength: 40, placeholder: "예: 점심 안내", "aria-labelledby": "wz-q",
-    on: { input: (e) => { d.name = e.target.value; refreshPrimary(); }, keydown: onEnter },
-  });
+  const counter = h("small", { class: "wz-counter", "aria-live": "polite" });
+  const paint = () => { counter.textContent = d.name.length >= NAME_MAX - 10 ? `${d.name.length}/${NAME_MAX}` : ""; };
+  paint();
+  return h("div", { class: "wz-namebox" }, h("input", {
+    class: "input wz-input", value: d.name, maxlength: NAME_MAX, placeholder: "예: 점심 안내", "aria-labelledby": "wz-q",
+    on: { input: (e) => { d.name = e.target.value; paint(); refreshPrimary(); }, keydown: onEnter },
+  }), counter);
 }
 
 function contentField(d) {
@@ -197,11 +212,12 @@ function textField(d) {
     class: "input wz-input", rows: 3, maxlength: 2000, placeholder: "예: 점심시간입니다.", "aria-labelledby": "wz-q", value: d.text,
     on: {
       input: (e) => { d.text = e.target.value; refreshPrimary(); },
-      keydown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); next(); } },
+      keydown: (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); next(); } },
     },
   });
   const listen = h("button", { class: "round-play", "aria-label": "들어 보기", on: { click: () => {
-    if (d.text.trim()) post("/api/preview", { kind: "tts", text: d.text.trim() }).catch(toastError);
+    if (!d.text.trim()) { toast("문구를 먼저 적어 주세요."); area.focus(); return; }
+    post("/api/preview", { kind: "tts", text: d.text.trim() }).then(() => toast("읽어 주는 중…")).catch(toastError);
   } } }, icon("play"));
   return h("div", { class: "wz-speak" }, area, listen);
 }
@@ -226,15 +242,11 @@ function fileField(d) {
       render();
     }
   }
-  const longest = Math.max(1, ...ctx.media.map((m) => m.seconds || 0));
-  return h("div", { class: "wz-files", role: "radiogroup", "aria-labelledby": "wz-q" },
-    ctx.media.map((m) =>
-      h("button", { class: "wz-file", role: "radio", "aria-checked": String(d.file === m.name), on: { click: () => { d.file = m.name; next(); } } },
-        h("span", { class: "wz-file-i blk-audio" }, icon("music")),
-        h("span", { class: "wz-file-n" }, m.display),
-        h("span", { class: "wz-file-len" }, h("i", { style: { width: `${Math.max(6, ((m.seconds || 0) / longest) * 100)}%` } })),
-        h("small", null, m.seconds ? fmtDuration(m.seconds) : ""))),
-    uploadTile, input);
+  return mediaPicker({
+    media: ctx.media, selected: d.file, upload: h("div", null, uploadTile, input),
+    onPick: (m) => { d.file = m.name; next(); },
+    onPreview: (m) => post("/api/preview", { kind: "audio", file: m.name }).then(() => toast(`${m.display} 듣는 중…`)).catch(toastError),
+  });
 }
 
 function timeField(d) {
@@ -256,8 +268,31 @@ function modeField(d) {
 }
 
 function datesField(d) {
-  return multiDateCalendar({ dates: d.dates, min: today() }, (dates) => { d.dates = dates; refreshPrimary(); });
+  const note = h("div", { "aria-live": "polite" });
+  const cal = multiDateCalendar({ dates: d.dates, min: today() }, (dates) => { d.dates = dates; refreshPrimary(); checkDates(d, cal); });
+  cal.note = note;
+  checkDates(d, cal);
+  return h("div", { class: "wz-dates" }, cal, note);
 }
+
+// 고른 날짜마다 지났는지·쉬는 날인지 서버에 물어 표시한다(시각이 바뀌어도 다시 묻는다)
+let checkSeq = 0;
+async function checkDates(d, cal) {
+  if (d.mode !== "dates" || !d.dates.length) { d.dateStates = {}; cal?.setStates?.({}); cal?.note?.replaceChildren(); return; }
+  const seq = ++checkSeq;
+  try {
+    const res = await post("/api/broadcasts/check", { time: d.time || "12:00", dates: d.dates });
+    if (seq !== checkSeq) return;
+    d.dateStates = Object.fromEntries(res.dates.map((x) => [x.date, x.state]));
+    cal?.setStates?.(d.dateStates);
+    cal?.note?.replaceChildren(skippedNote(d) ?? "");
+    if (st.current === "confirm") render(); else refreshPrimary();
+  } catch {
+    /* 확인하지 못해도 만들 때 서버가 다시 검사한다 */
+  }
+}
+
+const canCreate = (d) => d.mode !== "dates" || airingDates(d).length > 0;
 
 // 티켓 요약 ---------------------------------------------------------------------
 function ticket(d, editable) {
@@ -274,10 +309,22 @@ function ticket(d, editable) {
       d.content !== "tts" ? row("file", h("span", { class: "tk-text" }, icon("music"), media(d.file)?.display ?? "")) : null,
     ),
     clash.length ? h("p", { class: "err", role: "status" }, `같은 시각: ${clash.join(", ")}`) : null,
+    skippedNote(d),
     editable ? h("label", { class: "wz-agree" },
       h("input", { type: "checkbox", id: "wz-agree", checked: d.agreed, on: { change: (e) => { d.agreed = e.target.checked; render(); } } }),
       h("span", null, `${d.mode === "dates" ? "고른 날" : weekdaySummary(d.weekdays)} ${d.time}에 ${ctx.status?.ducks !== false ? "다른 소리를 잠시 멈추고 " : ""}방송해요`)) : null,
   );
+}
+
+function skippedNote(d) {
+  if (d.mode !== "dates") return null;
+  const off = d.dates.filter((x) => d.dateStates[x] === "off").length;
+  const past = d.dates.filter((x) => d.dateStates[x] === "past").length;
+  if (!off && !past) return null;
+  const why = [past ? `지난 시각 ${past}일` : "", off ? `쉬는 날 ${off}일` : ""].filter(Boolean).join(", ");
+  return airingDates(d).length
+    ? h("p", { class: "warn-line", role: "status" }, icon("alert"), `${why}은 방송하지 않아요`)
+    : h("p", { class: "err", role: "alert" }, icon("alert"), `고른 날에는 방송이 나가지 않아요 (${why})`);
 }
 
 // 완료 ------------------------------------------------------------------------

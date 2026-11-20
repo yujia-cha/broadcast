@@ -10,13 +10,14 @@
 <body>
 <div class="app" id="app">
   <header class="top">
-    <span class="brand">정시 방송<span class="livepill" id="livepill" hidden><span class="dot"></span><span id="livepill-text">방송 중</span></span></span>
+    <span class="brand">정시 방송</span>
     <nav class="nav" aria-label="메뉴">
       <button data-view="timetable">시간표</button>
       <button data-view="programs">방송 구성</button>
       <button data-view="settings">설정</button>
     </nav>
     <span class="grow"></span>
+    <button class="livepill" id="livepill" hidden><span class="dot"></span><span id="livepill-text">방송 중</span></button>
     <button class="btn sm accent" id="update-btn" hidden></button>
     <button class="btn sm pri" id="new-btn">새 방송 만들기</button>
     <span class="auto" id="auto-label">자동 방송<button class="switch" id="auto-switch" role="switch" aria-checked="true" aria-labelledby="auto-label"></button></span>
