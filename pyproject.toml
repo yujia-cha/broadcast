@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jeongsi-broadcast"
+description = "정해진 시각에 다른 소리를 멈추고 안내 음성과 음악을 내보내는 Windows 예약 방송 앱"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dynamic = ["version"]
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "pydantic>=2.6",
+  "python-multipart>=0.0.9",
+  "miniaudio>=1.59",
+]
+
+[project.optional-dependencies]
+windows = [
+  "comtypes>=1.4",
+  "pycaw>=20240210",
+  "psutil>=5.9",
+  "winrt-runtime>=2.0",
+  "winrt-Windows.Foundation>=2.0",
+  "winrt-Windows.Foundation.Collections>=2.0",
+  "winrt-Windows.Media.Control>=2.0",
+  "winrt-Windows.Media.SpeechSynthesis>=2.0",
+  "winrt-Windows.Storage.Streams>=2.0",
+  "pywebview>=5.0",
+  "pystray>=0.19",
+  "Pillow>=10.0",
+]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+jeongsi = "jeongsi.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "jeongsi.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+jeongsi = ["static/*", "static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

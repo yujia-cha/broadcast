@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+*.spec
+.pytest_cache/
+.coverage
+htmlcov/
+# 설계 문서·Claude 관련 파일은 저장소에 올리지 않음
+design/
+docs/design*
+design-notes.md
+CLAUDE.md
+.claude/
