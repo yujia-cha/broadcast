@@ -106,12 +106,13 @@ class Program(_Model):
 
 
 class Slot(_Model):
-    """주간 일정의 회차: 정해진 요일·시각에 방송 구성 하나를 내보낸다."""
+    """회차: 매주 정한 요일, 또는 고른 특정 날짜들의 정해진 시각에 방송 구성 하나를 내보낸다."""
 
     id: str = Field(default_factory=new_id)
     name: str = Field(min_length=1, max_length=40)
     time: str
-    weekdays: list[int] = Field(min_length=1, max_length=7)
+    weekdays: list[int] = Field(default_factory=list, max_length=7)  # 매주 반복할 요일
+    dates: list[date] = Field(default_factory=list, max_length=366)  # 특정 날짜(있으면 요일 대신 이 날들만)
     program_id: str
     enabled: bool = True
     start_date: date | None = None  # 이 날부터 방송(없으면 바로)
@@ -137,14 +138,27 @@ class Slot(_Model):
             raise ValueError("요일 값이 올바르지 않습니다.")
         return sorted(set(value))
 
+    @field_validator("dates")
+    @classmethod
+    def _sort_dates(cls, value: list[date]) -> list[date]:
+        return sorted(set(value))
+
     @model_validator(mode="after")
     def _check_period(self) -> Slot:
+        if not self.weekdays and not self.dates:
+            raise ValueError("요일이나 날짜를 하나 이상 고르세요.")
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError("끝나는 날이 시작하는 날보다 빠릅니다.")
         return self
 
     def active_on(self, day: date) -> bool:
         return (self.start_date is None or day >= self.start_date) and (self.end_date is None or day <= self.end_date)
+
+    def occurs_on(self, day: date) -> bool:
+        """그 날 방송하는 회차인지(켜짐·요일 또는 날짜·기간)."""
+        if not self.enabled or not self.active_on(day):
+            return False
+        return day in self.dates if self.dates else day.weekday() in self.weekdays
 
 
 class DayOff(_Model):

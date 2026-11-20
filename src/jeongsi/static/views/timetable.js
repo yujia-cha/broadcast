@@ -5,7 +5,7 @@ import {
   addDays, confirmDialog, fmtClock, fmtDate, fmtDuration, fmtIn, fmtMonthDay, fmtWeekTitle, h, icon, openDialog, toast, toastError,
 } from "../ui.js";
 import {
-  closePopover, dayRuler, iconAction, popover, rangeCalendar, strip, timePicker, toHHMM, toMinutes, weekdayPicker,
+  closePopover, dayRuler, iconAction, multiDateCalendar, popover, rangeCalendar, strip, timePicker, toHHMM, toMinutes, weekdayPicker,
 } from "../visual.js";
 
 const SNAP = 5;
@@ -247,7 +247,7 @@ function blockPopover(anchor, row, cell) {
     if (!offByOverride) actions.push(iconAction("clock", "시각", () => timeEditor(anchor, row, cell)));
     if (cell.changed) actions.push(iconAction("undo", "원래대로", () => clearOverride(row, cell, "원래대로 돌렸습니다.")));
   }
-  actions.push(iconAction("edit", "매주", () => { closePopover(); openSlotDialog(row.slot); }));
+  actions.push(iconAction("edit", "편집", () => { closePopover(); openSlotDialog(row.slot); }));
   popover(anchor,
     h("div", { class: "pop-in" },
       h("div", { class: "pop-head" }, h("b", null, cell.time), h("span", null, row.slot.name), h("small", null, fmtDate(cell.date))),
@@ -434,21 +434,29 @@ async function undoSkip() {
 
 // 매주 일정 편집 ----------------------------------------------------------------------
 export function openSlotDialog(slot) {
-  const draft = { ...slot, weekdays: [...slot.weekdays] };
-  let nameEl, progEl, errEl, startEl, endEl, enabledEl, confirmBox;
+  const draft = { ...slot, weekdays: [...slot.weekdays], dates: [...(slot.dates || [])] };
+  let mode = draft.dates.length ? "dates" : "weekly";
+  let nameEl, progEl, errEl, startEl, endEl, enabledEl, confirmBox, whenBox, modeBox;
   let overlapConfirmed = null;
-  const { close } = openDialog("매주 일정", (close) =>
+  const paintWhen = () => {
+    modeBox.replaceChildren(...[["weekly", "매주"], ["dates", "특정 날짜"]].map(([v, label]) =>
+      h("button", { type: "button", class: "chip-btn", "aria-pressed": String(mode === v), on: { click: () => { mode = v; paintWhen(); } } }, label)));
+    whenBox.replaceChildren(mode === "weekly"
+      ? h("div", { class: "wz-stack" },
+          weekdayPicker(draft.weekdays, (v) => (draft.weekdays = v)),
+          h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s3)" } },
+            h("label", { class: "field" }, h("span", null, "시작일"), (startEl = h("input", { class: "input", type: "date", value: draft.start_date || "" }))),
+            h("label", { class: "field" }, h("span", null, "종료일"), (endEl = h("input", { class: "input", type: "date", value: draft.end_date || "" })))))
+      : multiDateCalendar({ dates: draft.dates, min: addDays(todayIso(), -365) }, (v) => (draft.dates = v)));
+  };
+  const { close } = openDialog("방송 편집", (close) =>
     h("form", { class: "dlg", on: { submit: (e) => { e.preventDefault(); save(); } } },
-      h("h2", null, "매주 일정"),
-      (nameEl = h("input", { class: "input", value: draft.name, maxlength: 40, "aria-label": "이름", required: true })),
+      (nameEl = h("input", { class: "input pg-name", value: draft.name, maxlength: 40, "aria-label": "이름", required: true })),
       timePicker(draft.time, (v) => (draft.time = v)),
-      weekdayPicker(draft.weekdays, (v) => (draft.weekdays = v)),
+      (modeBox = h("div", { class: "mode-seg", role: "group", "aria-label": "반복" })),
+      (whenBox = h("div")),
       h("label", { class: "field" }, h("span", null, "방송 구성"),
         (progEl = h("select", { class: "input" }, ctx.programs.map((p) => h("option", { value: p.id, selected: p.id === draft.program_id }, p.name))))),
-      h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s3)" } },
-        h("label", { class: "field" }, h("span", null, "시작일"), (startEl = h("input", { class: "input", type: "date", value: draft.start_date || "" }))),
-        h("label", { class: "field" }, h("span", null, "종료일"), (endEl = h("input", { class: "input", type: "date", value: draft.end_date || "" }))),
-      ),
       h("label", { style: { display: "flex", gap: "var(--s2)", alignItems: "center" } },
         (enabledEl = h("input", { type: "checkbox", checked: draft.enabled, style: { width: "18px", height: "18px", accentColor: "var(--accent)" } })), "사용"),
       (errEl = h("p", { class: "err", role: "alert" })),
@@ -460,18 +468,26 @@ export function openSlotDialog(slot) {
         h("button", { type: "submit", class: "btn pri" }, "저장"),
       ),
     ));
+  paintWhen();
 
   async function save() {
     errEl.textContent = "";
-    const body = { name: nameEl.value.trim(), time: draft.time, weekdays: draft.weekdays, program_id: progEl.value, enabled: enabledEl.checked, start_date: startEl.value || null, end_date: endEl.value || null };
+    const weekly = mode === "weekly";
+    const body = {
+      name: nameEl.value.trim(), time: draft.time, program_id: progEl.value, enabled: enabledEl.checked,
+      weekdays: weekly ? draft.weekdays : [], dates: weekly ? [] : draft.dates,
+      start_date: weekly ? startEl.value || null : null, end_date: weekly ? endEl.value || null : null,
+    };
     if (!body.name) return (errEl.textContent = "이름을 입력하세요.");
-    if (!body.weekdays.length) return (errEl.textContent = "요일을 하나 이상 고르세요.");
+    if (weekly && !body.weekdays.length) return (errEl.textContent = "요일을 하나 이상 고르세요.");
+    if (!weekly && !body.dates.length) return (errEl.textContent = "날짜를 하나 이상 고르세요.");
     if (body.start_date && body.end_date && body.end_date < body.start_date) return (errEl.textContent = "종료일이 시작일보다 빠릅니다.");
-    const clash = (ctx.weekSlots || []).filter((s) => s.id !== slot.id && s.enabled && body.enabled && s.time === body.time && s.weekdays.some((d) => body.weekdays.includes(d)));
-    const key = `${body.time}|${body.weekdays.join(",")}`;
+    const clash = (ctx.weekSlots || []).filter((s) => s.id !== slot.id && s.enabled && body.enabled && s.time === body.time
+      && (weekly && !s.dates?.length ? s.weekdays.some((d) => body.weekdays.includes(d)) : (s.dates || []).some((d) => body.dates.includes(d))));
+    const key = `${body.time}|${body.weekdays.join(",")}|${body.dates.join(",")}`;
     if (clash.length && overlapConfirmed !== key) {
       overlapConfirmed = key;
-      errEl.textContent = `같은 시각(${body.time})에 '${clash.map((s) => s.name).join("', '")}' 회차가 있어 이어서 방송돼요. 한 번 더 누르면 저장합니다.`;
+      errEl.textContent = `같은 시각(${body.time})에 '${clash.map((s) => s.name).join("', '")}'이(가) 있어 이어서 방송돼요. 한 번 더 누르면 저장합니다.`;
       return;
     }
     try {
@@ -486,7 +502,7 @@ export function openSlotDialog(slot) {
   function askDelete() {
     confirmBox.hidden = false;
     confirmBox.replaceChildren(h("div", { class: "confirm-row" },
-      h("span", { class: "grow" }, "이 회차를 지웁니다."),
+      h("span", { class: "grow" }, "이 방송을 지웁니다."),
       h("button", { type: "button", class: "btn sm", on: { click: () => (confirmBox.hidden = true) } }, "취소"),
       h("button", { type: "button", class: "btn sm stop", on: { click: async () => {
         try { await del(`/api/slots/${slot.id}`); close(); await refresh("지웠습니다."); } catch (err) { errEl.textContent = err.message; }

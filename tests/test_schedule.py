@@ -112,3 +112,13 @@ def test_next_occurrence_respects_future_start(config):
     config.slots[0].start_date = date(2026, 12, 1)
     nxt = next_occurrence(config, datetime(2026, 11, 20, 7, 0))
     assert nxt.date == date(2026, 12, 1)
+
+
+def test_date_mode_slot_occurs_only_on_its_dates(config):
+    # Arrange: 요일 대신 특정 날짜(수·토)만
+    config.slots[1].dates = [WED, date(2026, 11, 21)]
+    config.slots[1].weekdays = []
+    # Act / Assert
+    assert "lunch" in [o.slot_id for o in resolve_day(config, WED)]
+    assert "lunch" in [o.slot_id for o in resolve_day(config, date(2026, 11, 21))]
+    assert "lunch" not in [o.slot_id for o in resolve_day(config, FRI)]

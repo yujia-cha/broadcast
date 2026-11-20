@@ -106,3 +106,10 @@ def test_media_names_cannot_escape_or_use_device_names(name):
 def test_slot_end_before_start_is_rejected():
     with pytest.raises(ValidationError, match="끝나는 날"):
         Slot(name="회차", time="09:00", weekdays=[0], program_id="p1", start_date=date(2026, 12, 2), end_date=date(2026, 12, 1))
+
+
+def test_slot_needs_weekdays_or_dates():
+    with pytest.raises(ValidationError, match="요일이나 날짜"):
+        Slot(name="회차", time="09:00", weekdays=[], program_id="p1")
+    slot = Slot(name="회차", time="09:00", dates=[date(2026, 12, 2), date(2026, 12, 1), date(2026, 12, 2)], program_id="p1")
+    assert slot.dates == [date(2026, 12, 1), date(2026, 12, 2)]

@@ -336,3 +336,13 @@ def test_create_broadcast_is_all_or_nothing(env, bad):
     res = client.post("/api/broadcasts", json=body, headers=HEADERS)
     assert res.status_code == 422
     assert (len(services.store.config.programs), len(services.store.config.slots)) == before
+
+
+def test_create_broadcast_on_specific_dates(env):
+    client, services, _ = env
+    body = {"name": "행사 안내", "steps": [{"kind": "tts", "text": "행사가 곧 시작합니다."}], "time": "10:00", "dates": ["2026-11-21", "2026-11-28"]}
+    res = client.post("/api/broadcasts", json=body, headers=HEADERS)
+    assert res.status_code == 201
+    assert res.json()["next"] == {"date": "2026-11-21", "time": "10:00"}
+    week = client.get("/api/week?start=2026-11-16").json()
+    assert [d["label"] for d in week["days"]][-1] == "토"

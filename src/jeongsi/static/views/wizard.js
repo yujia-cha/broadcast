@@ -2,13 +2,13 @@
 // 마지막에 티켓 모양 요약을 확인하면 방송 구성과 회차를 한 번에 만든다.
 import { api, get, post } from "../api.js";
 import { confirmDialog, fmtDate, fmtDuration, h, icon, toast, toastError, weekdaySummary } from "../ui.js";
-import { countPicker, dayDots, rangeCalendar, strip, timePicker, weekdayPicker } from "../visual.js";
+import { countPicker, dateChips, dayDots, multiDateCalendar, strip, timePicker, weekdayPicker } from "../visual.js";
 
 let ctx, root, st;
 
 function freshState() {
   return {
-    draft: { name: "", content: null, text: "", ttsRepeat: null, file: null, audioRepeat: null, time: "", weekdays: [], startDate: null, endDate: null, period: false, agreed: false },
+    draft: { name: "", content: null, text: "", ttsRepeat: null, file: null, audioRepeat: null, time: "", mode: null, weekdays: [], dates: [], agreed: false },
     current: "name",
     answered: new Set(),
     result: null,
@@ -22,7 +22,7 @@ const stripOf = (d) => [
   ...(d.content && d.content !== "audio" ? [{ kind: "tts", repeat: d.ttsRepeat || 1 }] : []),
   ...(d.content && d.content !== "tts" ? [{ kind: "audio", repeat: d.audioRepeat || 1 }] : []),
 ];
-const periodText = (d) => `${!d.startDate || d.startDate === today() ? "오늘" : fmtDate(d.startDate)}부터 · ${d.endDate ? `${fmtDate(d.endDate)}까지` : "계속"}`;
+const whenPicture = (d) => (d.mode === "dates" ? dateChips(d.dates) : dayDots(d.weekdays));
 
 const STEPS = [
   { id: "name", icon: "edit", title: "방송 이름", valid: (d) => d.name.trim().length > 0, show_: (d) => d.name.trim(), render: nameField },
@@ -32,8 +32,9 @@ const STEPS = [
   { id: "file", icon: "music", when: (d) => d.content !== "tts", title: "어떤 음악?", valid: (d) => !!media(d.file), show_: (d) => media(d.file)?.display, render: fileField },
   { id: "audioRepeat", icon: "music", when: (d) => d.content !== "tts", title: "몇 번 틀까요?", valid: (d) => !!d.audioRepeat, show_: (d) => strip([{ kind: "audio", repeat: d.audioRepeat }], { size: "sm" }), render: (d) => countPicker("audio", d.audioRepeat, (n) => { d.audioRepeat = n; next(); }) },
   { id: "time", icon: "clock", title: "몇 시에?", valid: (d) => /^\d\d:\d\d$/.test(d.time), show_: (d) => d.time, render: timeField },
-  { id: "days", icon: "calendarOff", title: "무슨 요일에?", valid: (d) => d.weekdays.length > 0, show_: (d) => dayDots(d.weekdays), render: daysField },
-  { id: "period", icon: "calendarOff", title: "언제부터 언제까지?", valid: (d) => d.period, show_: (d) => periodText(d), render: periodField },
+  { id: "mode", icon: "calendarOff", title: "어떻게 반복할까요?", valid: (d) => !!d.mode, show_: (d) => (d.mode === "dates" ? "특정 날짜" : "매주"), render: modeField },
+  { id: "days", icon: "calendarOff", when: (d) => d.mode !== "dates", title: "무슨 요일마다?", valid: (d) => d.weekdays.length > 0, show_: (d) => dayDots(d.weekdays), render: daysField },
+  { id: "dates", icon: "calendarOff", when: (d) => d.mode === "dates", title: "어느 날짜에?", valid: (d) => d.dates.length > 0, show_: (d) => dateChips(d.dates), render: datesField },
 ];
 
 const visibleSteps = () => STEPS.filter((s) => !s.when || s.when(st.draft));
@@ -89,9 +90,9 @@ function toBody(d) {
   if (d.content !== "audio") steps.push({ kind: "tts", text: d.text.trim(), repeat: d.ttsRepeat, gap_sec: d.ttsRepeat > 1 ? 1 : 0 });
   if (d.content !== "tts") steps.push({ kind: "audio", file: d.file, repeat: d.audioRepeat, label: (media(d.file)?.display ?? "").replace(/\.[^.]+$/, "").slice(0, 20) });
   return {
-    name: d.name.trim(), steps, time: d.time, weekdays: d.weekdays,
-    start_date: d.startDate && d.startDate !== today() ? d.startDate : null,
-    end_date: d.endDate || null,
+    name: d.name.trim(), steps, time: d.time,
+    weekdays: d.mode === "dates" ? [] : d.weekdays,
+    dates: d.mode === "dates" ? d.dates : [],
   };
 }
 
@@ -142,7 +143,17 @@ function render(focus = false) {
     answered.length ? h("div", { class: "wz-answers" }, answered) : null,
     h("div", { class: "wz-bar" }, primary),
   ));
-  if (focus) root.querySelector(".wz-active input:not([type=checkbox]), .wz-active textarea, .wz-active button")?.focus();
+  if (focus) focusField();
+}
+
+// Enter가 "다음"이 되도록 칸의 중심 조작부에 초점을 둔다(시각은 핀, 선택지는 고른 것)
+function focusField() {
+  const area = root.querySelector(".wz-active");
+  if (!area) return;
+  for (const sel of ["input:not([type=checkbox])", "textarea", ".tp-pin", "[aria-checked='true']", "[role=radio]", "button"]) {
+    const el = area.querySelector(sel);
+    if (el) return el.focus();
+  }
 }
 
 function answerChip(step, onClick) {
@@ -235,10 +246,17 @@ function daysField(d) {
   return weekdayPicker(d.weekdays, (days, preset) => { d.weekdays = days; refreshPrimary(); if (preset) next(); });
 }
 
-function periodField(d) {
-  d.period = true;
-  if (!d.startDate) d.startDate = today();
-  return rangeCalendar({ start: d.startDate, end: d.endDate, min: today() }, (v) => { d.startDate = v.start; d.endDate = v.end; });
+function modeField(d) {
+  const art = (kind) => h("span", { class: `when-art${kind === "dates" ? " cal" : ""}`, "aria-hidden": "true" },
+    Array.from({ length: 14 }, (_, i) => h("i", { class: (kind === "weekly" ? i % 7 < 5 : [2, 9, 11].includes(i)) ? "on" : "" })));
+  return h("div", { class: "wz-tiles two", role: "radiogroup", "aria-labelledby": "wz-q" },
+    [["weekly", "매주"], ["dates", "특정 날짜"]].map(([value, label]) =>
+      h("button", { class: "wz-tile", role: "radio", "aria-checked": String(d.mode === value), on: { click: () => { d.mode = value; next(); } } },
+        art(value), h("span", null, label))));
+}
+
+function datesField(d) {
+  return multiDateCalendar({ dates: d.dates, min: today() }, (dates) => { d.dates = dates; refreshPrimary(); });
 }
 
 // 티켓 요약 ---------------------------------------------------------------------
@@ -246,20 +264,19 @@ function ticket(d, editable) {
   const row = (id, content) => editable
     ? h("button", { class: "tk-row", "aria-label": `${stepById(id).title} 고치기`, on: { click: () => goTo(id) } }, content)
     : h("div", { class: "tk-row" }, content);
-  const clash = (ctx.weekSlots || []).filter((s) => s.enabled && s.time === d.time && s.weekdays.some((w) => d.weekdays.includes(w))).map((s) => s.name);
+  const clash = (ctx.weekSlots || []).filter((s) => s.enabled && s.time === d.time && sameDay(s, d)).map((s) => s.name);
   return h("div", { class: "wz-stack" },
     h("div", { class: "ticket" },
-      h("div", { class: "tk-top" }, row("time", h("span", { class: "tk-time" }, d.time)), row("days", dayDots(d.weekdays))),
+      h("div", { class: "tk-top" }, row("time", h("span", { class: "tk-time" }, d.time)), row(d.mode === "dates" ? "dates" : "days", whenPicture(d))),
       row("name", h("span", { class: "tk-name" }, d.name.trim())),
       row("content", strip(stripOf(d), { size: "lg" })),
       d.content !== "audio" ? row("text", h("span", { class: "tk-text" }, icon("speech"), d.text.trim())) : null,
       d.content !== "tts" ? row("file", h("span", { class: "tk-text" }, icon("music"), media(d.file)?.display ?? "")) : null,
-      row("period", h("span", { class: "tk-text" }, icon("calendarOff"), periodText(d))),
     ),
     clash.length ? h("p", { class: "err", role: "status" }, `같은 시각: ${clash.join(", ")}`) : null,
     editable ? h("label", { class: "wz-agree" },
       h("input", { type: "checkbox", id: "wz-agree", checked: d.agreed, on: { change: (e) => { d.agreed = e.target.checked; render(); } } }),
-      h("span", null, `${weekdaySummary(d.weekdays)} ${d.time}에 ${ctx.status?.ducks !== false ? "다른 소리를 잠시 멈추고 " : ""}방송해요`)) : null,
+      h("span", null, `${d.mode === "dates" ? "고른 날" : weekdaySummary(d.weekdays)} ${d.time}에 ${ctx.status?.ducks !== false ? "다른 소리를 잠시 멈추고 " : ""}방송해요`)) : null,
   );
 }
 
@@ -280,4 +297,13 @@ function renderDone() {
     ),
   );
   root.querySelector(".wz-done .btn.pri")?.focus();
+}
+
+// 같은 날 방송하는지(요일 또는 날짜가 겹치는지)
+function sameDay(slot, d) {
+  const wd = (iso) => (new Date(`${iso}T00:00:00`).getDay() + 6) % 7;
+  if (d.mode === "dates") {
+    return slot.dates?.length ? slot.dates.some((x) => d.dates.includes(x)) : d.dates.some((x) => slot.weekdays.includes(wd(x)));
+  }
+  return slot.dates?.length ? slot.dates.some((x) => d.weekdays.includes(wd(x))) : slot.weekdays.some((w) => d.weekdays.includes(w));
 }

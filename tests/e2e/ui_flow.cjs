@@ -49,9 +49,8 @@ async function main() {
       if ((await page.textContent(".tp-time")) !== "23:55") throw new Error(`시각이 다릅니다: ${await page.textContent(".tp-time")}`);
       await shot("02-wizard-time");
       await page.keyboard.press("Enter");
+      await page.click(".wz-tile >> text=매주");
       await page.click(".chip-btn >> text=매일");
-      await page.waitForSelector(".rc-grid");
-      await page.click("#wz-next");
       await page.waitForSelector(".ticket");
       await shot("03-wizard-ticket");
     });
@@ -71,6 +70,30 @@ async function main() {
       await page.click("text=시간표 보기");
       await page.waitForSelector('.cblock[aria-label*="점심 방송"]');
       await shot("04-calendar");
+    });
+
+    await step("새 방송: 특정 날짜 여러 개 고르기", async () => {
+      await page.click("#new-btn");
+      await page.fill(".wz-active input", "행사 안내");
+      await page.keyboard.press("Enter");
+      await page.click(".wz-tile >> text=음성");
+      await page.fill(".wz-active textarea", "행사가 곧 시작합니다.");
+      await page.click("#wz-next");
+      await page.click('.cp-item[aria-label="1번"]');
+      await page.keyboard.press("Enter");
+      await page.click(".wz-tile >> text=특정 날짜");
+      const days = page.locator(".wz-active .rc-day:not([disabled])");
+      await days.nth(1).click();
+      await days.nth(3).click();
+      if ((await page.locator(".date-chip").count()) !== 2) throw new Error("고른 날짜가 2개가 아닙니다");
+      await shot("03b-wizard-dates");
+      await page.click("#wz-next");
+      await page.waitForSelector(".ticket .dchips");
+      await page.check("#wz-agree");
+      await page.click(".wz-cta >> text=만들기");
+      await page.waitForSelector("#wz-q >> text=예약했어요");
+      await page.click("text=시간표 보기");
+      await page.waitForSelector('.cblock[aria-label*="점심 방송"]');
     });
 
     await step("블록을 끌어 오늘만 시각 바꾸기", async () => {
@@ -136,7 +159,7 @@ async function main() {
 
     await step("매주 일정 편집 열고 저장", async () => {
       await page.click(".cal-col.today .cblock.next");
-      await page.click(".pop .ia >> text=매주");
+      await page.click(".pop .ia >> text=편집");
       await page.waitForSelector("dialog .wdp");
       await page.click("dialog >> button:has-text('저장')");
       await toast("저장했습니다.");

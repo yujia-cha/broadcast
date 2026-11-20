@@ -296,6 +296,7 @@ def create_app(services: Services) -> FastAPI:
             "name": name,
             "time": body.get("time"),
             "weekdays": body.get("weekdays") or [],
+            "dates": body.get("dates") or [],
             "program_id": program.id,
             "start_date": body.get("start_date"),
             "end_date": body.get("end_date"),

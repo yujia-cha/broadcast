@@ -76,3 +76,10 @@ def test_describe_next_is_none_when_auto_off():
 def test_modules_import_without_windows(module):
     # Windows 전용 라이브러리는 함수 안에서만 불러오므로 어디서나 import 된다
     importlib.import_module(module)
+
+
+def test_weekend_column_appears_for_date_in_that_week():
+    cfg = make_config()
+    cfg.slots.append(Slot(name="행사", time="10:00", dates=[date(2026, 11, 21)], program_id="p1"))
+    assert visible_weekdays(cfg, MON) == [0, 1, 2, 3, 4, 5]
+    assert visible_weekdays(cfg, date(2026, 11, 23)) == [0, 1, 2, 3, 4]

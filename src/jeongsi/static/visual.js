@@ -183,6 +183,50 @@ export function rangeCalendar({ start, end, min, allowOpen = true }, onChange) {
   return wrap;
 }
 
+// 특정 날짜 여러 개 고르기: 달력에서 누를 때마다 켜고 끈다 ----------------------------------------
+export function multiDateCalendar({ dates = [], min }, onChange) {
+  let picked = new Set(dates);
+  let month = parseDate(dates[0] || min);
+  month.setDate(1);
+  const wrap = h("div", { class: "rc" });
+  const short = (iso) => { const d = parseDate(iso); return `${d.getMonth() + 1}/${d.getDate()} ${WEEKDAYS[(d.getDay() + 6) % 7]}`; };
+  const paint = () => {
+    const offset = (month.getDay() + 6) % 7;
+    const last = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+    const cells = Array.from({ length: offset }, () => h("span"));
+    for (let d = 1; d <= last; d++) {
+      const iso = isoDate(new Date(month.getFullYear(), month.getMonth(), d));
+      const on = picked.has(iso);
+      cells.push(h("button", { class: `rc-day${on ? " start" : ""}`, disabled: iso < min, "aria-label": iso, "aria-pressed": String(on), on: { click: () => toggle(iso) } }, String(d)));
+    }
+    const sorted = [...picked].sort();
+    wrap.replaceChildren(
+      h("div", { class: "rc-head" },
+        h("button", { class: "ibtn", "aria-label": "이전 달", on: { click: () => { month.setMonth(month.getMonth() - 1); paint(); } } }, icon("left")),
+        h("b", null, `${month.getFullYear()}년 ${month.getMonth() + 1}월`),
+        h("button", { class: "ibtn", "aria-label": "다음 달", on: { click: () => { month.setMonth(month.getMonth() + 1); paint(); } } }, icon("right")),
+      ),
+      h("div", { class: "rc-grid" }, WEEKDAYS.map((w) => h("span", { class: "rc-w" }, w)), cells),
+      h("div", { class: "date-chips", "aria-live": "polite" },
+        sorted.map((iso) => h("span", { class: "date-chip" }, short(iso),
+          h("button", { class: "off-x", "aria-label": `${iso} 빼기`, on: { click: () => toggle(iso) } }, icon("x"))))),
+    );
+  };
+  const toggle = (iso) => {
+    if (picked.has(iso)) picked.delete(iso); else picked.add(iso);
+    paint();
+    onChange([...picked].sort());
+  };
+  paint();
+  return wrap;
+}
+
+export function dateChips(dates, max = 4) {
+  const short = (iso) => { const d = parseDate(iso); return `${d.getMonth() + 1}/${d.getDate()}`; };
+  const shown = dates.slice(0, max).map(short).join(" · ");
+  return h("span", { class: "dchips", "aria-label": dates.join(", ") }, icon("calendarOff"), dates.length > max ? `${shown} 외 ${dates.length - max}일` : shown);
+}
+
 // 오늘 눈금자: 하루 중 방송 위치와 지금 ---------------------------------------------------
 export function dayRuler(times, nowMinutes, nextTime) {
   const mins = times.map(toMinutes);

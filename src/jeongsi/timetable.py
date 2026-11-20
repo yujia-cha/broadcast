@@ -14,10 +14,16 @@ def week_start(day: date) -> date:
     return day - timedelta(days=day.weekday())
 
 
-def visible_weekdays(config: Config) -> list[int]:
+def visible_weekdays(config: Config, start: date | None = None) -> list[int]:
+    """평일은 항상, 주말은 그 주에 방송이 있을 때만 보인다."""
     days = {0, 1, 2, 3, 4}
+    week = [start + timedelta(days=i) for i in range(7)] if start else []
     for slot in config.slots:
-        if slot.enabled:
+        if not slot.enabled:
+            continue
+        if slot.dates:
+            days.update(d.weekday() for d in week if d in slot.dates)
+        else:
             days.update(slot.weekdays)
     return sorted(days)
 
@@ -33,7 +39,7 @@ def build_week(
     방송 기록을 남기지 않으므로 지난 회차는 방송 여부와 관계없이 past로 표시한다.
     """
     start = week_start(start)
-    weekdays = visible_weekdays(config)
+    weekdays = visible_weekdays(config, start)
     dates = [start + timedelta(days=i) for i in weekdays]
     nxt = next_occurrence(config, now) if config.settings.auto_broadcast else None
     next_key = nxt.key if nxt else None

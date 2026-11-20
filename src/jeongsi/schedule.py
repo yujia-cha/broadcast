@@ -38,7 +38,7 @@ def resolve_day(config: Config, day: date) -> list[Occurrence]:
     day_off = config.day_off_for(day)
     result: list[Occurrence] = []
     for slot in config.slots:
-        if not slot.enabled or day.weekday() not in slot.weekdays or not slot.active_on(day):
+        if not slot.occurs_on(day):
             continue
         base_time = parse_hhmm(slot.time)
         override = config.override_for(day, slot.id)
