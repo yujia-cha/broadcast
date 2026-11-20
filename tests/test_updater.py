@@ -15,6 +15,7 @@ from jeongsi.updater import (
     is_newer,
     old_exe_path,
     parse_version,
+    relaunch_env,
 )
 
 EXE = b"new exe bytes" * 100
@@ -227,3 +228,29 @@ def test_launch_failure_rolls_back_to_old_version(tmp_path):
         apply_update(new, exe, launch=blocked)
     assert exe.read_bytes() == b"old"
     assert not old_exe_path(exe).exists()
+
+
+def test_relaunch_env_drops_pyinstaller_state_and_keeps_the_rest():
+    # Arrange: 이전 onefile exe가 자식에게 넘기는 값과 일반 값
+    environ = {
+        "_PYI_APPLICATION_HOME_DIR": r"C:\Temp\_MEI123",
+        "_PYI_ARCHIVE_FILE": r"C:\app\JeongsiBroadcast.old.exe",
+        "_PYI_PARENT_PROCESS_LEVEL": "1",
+        "_MEIPASS2": r"C:\Temp\_MEI123",
+        "PATH": r"C:\Windows",
+        "JEONGSI_UPDATE_FEED": "http://127.0.0.1:1/latest.json",
+    }
+
+    # Act
+    env = relaunch_env(environ)
+
+    # Assert
+    assert env == {
+        "PATH": r"C:\Windows",
+        "JEONGSI_UPDATE_FEED": "http://127.0.0.1:1/latest.json",
+        "PYINSTALLER_RESET_ENVIRONMENT": "1",
+    }
+
+
+def test_relaunch_env_with_empty_environment_still_resets():
+    assert relaunch_env({}) == {"PYINSTALLER_RESET_ENVIRONMENT": "1"}

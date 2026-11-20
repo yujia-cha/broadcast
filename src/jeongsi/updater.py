@@ -16,7 +16,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -213,17 +213,30 @@ def old_exe_path(exe_path: Path) -> Path:
     return exe_path.with_name(exe_path.stem + ".old" + exe_path.suffix)
 
 
+def relaunch_env(environ: Mapping[str, str]) -> dict[str, str]:
+    """새 exe가 이전 exe의 자식으로 착각하지 않게 PyInstaller 실행 정보를 지운 환경.
+
+    onefile exe는 자식 프로세스에 압축 해제 폴더 위치(_PYI_*, _MEIPASS2)를 넘긴다.
+    이 값이 남아 있으면 새 exe가 이전 버전의 임시 폴더로 실행되어, 이전 버전이 끝나지 않고
+    새 버전도 제대로 뜨지 않는다. PyInstaller 6.9+는 PYINSTALLER_RESET_ENVIRONMENT=1을 본다.
+    """
+    env = {k: v for k, v in environ.items() if not k.upper().startswith(("_PYI_", "_MEIPASS"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def _launch_detached(args: list[str]) -> None:
     """이전 앱이 끝나도 새 앱이 같이 끝나지 않도록 분리해서 실행한다."""
+    env = relaunch_env(os.environ)
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         try:
-            subprocess.Popen(args, close_fds=True, creationflags=flags | 0x01000000)  # CREATE_BREAKAWAY_FROM_JOB  # noqa: S603
+            subprocess.Popen(args, close_fds=True, env=env, creationflags=flags | 0x01000000)  # CREATE_BREAKAWAY_FROM_JOB  # noqa: S603
             return
         except OSError:
             log.info("작업 그룹에서 분리할 수 없어 일반 방식으로 실행합니다")
-    subprocess.Popen(args, close_fds=True, creationflags=flags)  # noqa: S603
+    subprocess.Popen(args, close_fds=True, env=env, creationflags=flags)  # noqa: S603
 
 
 def apply_update(
