@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from .icon import ORANGE, TEAL, app_icon
 from .updater import cleanup_old_exe
 
 log = logging.getLogger(__name__)
+EXIT_GRACE_SECONDS = 10
 
 
 class DesktopShell:
@@ -49,7 +51,18 @@ class DesktopShell:
         return Path(sys.executable) if getattr(sys, "frozen", False) else None
 
     def request_exit(self) -> None:
+        """업데이트 등으로 앱을 끝낸다. 창이 초기화 중이라 닫히지 않아도 정해진 시간 안에 반드시 끝낸다."""
+        threading.Thread(target=self._exit_watchdog, name="exit-watchdog", daemon=True).start()
         self.quit()
+
+    def _exit_watchdog(self, grace: float = EXIT_GRACE_SECONDS) -> None:
+        time.sleep(grace)
+        log.warning("창이 닫히지 않아 강제로 종료합니다")
+        try:
+            if self.application is not None:
+                self.application.stop()  # 소리 상태 복원
+        finally:
+            os._exit(0)
 
     # 동작 ------------------------------------------------------------------
     def quit(self) -> None:
