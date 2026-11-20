@@ -30,21 +30,61 @@ async function main() {
       await shot("01-empty");
     });
 
-    await step("방송 구성 만들기(음성 ×2, 파일 올리기, 단계 복제)", async () => {
-      await page.click("text=방송 구성 만들기");
-      await page.fill(".editor-head input", "점심 안내");
-      await page.fill("textarea", "점심시간입니다. 손을 씻고 급식실로 이동해 주세요.");
-      await page.click('.step .stepper button[aria-label="늘리기"]');
-      await page.click("text=음악·소리 단계");
-      const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.click("[data-upload]")]);
+    await step("새 방송 만들기: 질문에 차례로 답하기", async () => {
+      await page.click(".empty >> text=새 방송 만들기");
+      await page.waitForSelector("#wz-q >> text=방송 이름을 정해 주세요");
+      await page.fill(".wz-active input", "점심 안내");
+      await page.keyboard.press("Enter");
+      await page.waitForSelector("#wz-q >> text=무엇을 내보낼까요?");
+      await page.click(".wz-choice >> text=음성 안내 + 음악");
+      await page.waitForSelector("#wz-q >> text=읽어 줄 문구를 입력해 주세요");
+      await page.fill(".wz-active textarea", "점심시간입니다. 손을 씻고 급식실로 이동해 주세요.");
+      await page.click("#wz-next");
+      await page.click(".wz-choice >> text=2번");
+      await page.waitForSelector("#wz-q >> text=어떤 파일을 틀까요?");
+      const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.click(".wz-active >> text=파일 올리기")]);
       await chooser.setFiles(path.join(assetDir, "chime.wav"));
-      await page.waitForSelector("text=chime.wav을(를) 올렸습니다.");
+      await page.waitForSelector("#wz-q >> text=몇 번 틀까요?");
+      await page.click(".wz-choice >> text=1번");
+      await page.waitForSelector("#wz-q >> text=몇 시에 내보낼까요?");
+      await shot("02-wizard-step");
+      await page.fill(".wz-active input[type=time]", "23:59");
+      await page.keyboard.press("Enter");
+      await page.click(".wz-choice >> text=매일");
+      await page.click(".wz-choice >> text=오늘부터");
+      await page.click(".wz-choice >> text=계속");
+      await page.waitForSelector("#wz-q >> text=이대로 만들까요?");
+      await shot("02-wizard-confirm");
+    });
+
+    await step("확인 화면에서 이름 고치기 → 다시 확인으로", async () => {
+      await page.click('.wz-row[aria-label="이름 고치기"]');
+      await page.fill(".wz-active input", "점심 방송");
+      await page.click("#wz-next");
+      await page.waitForSelector("#wz-q >> text=이대로 만들까요?");
+      await page.waitForSelector(".wz-row >> text=점심 방송");
+    });
+
+    await step("확인에 체크해야 만들기 가능 → 예약 완료", async () => {
+      if (!(await page.locator(".wz-cta >> text=만들기").isDisabled())) throw new Error("확인 전인데 만들기가 눌립니다");
+      await page.check("#wz-agree");
+      await page.click(".wz-cta >> text=만들기");
+      await page.waitForSelector("#wz-q >> text=예약했어요");
+      await shot("03-wizard-done");
+      await page.click("text=시간표 보기");
+      await page.waitForSelector(".tt .rowhd >> text=점심 방송");
+      await shot("04-timetable");
+    });
+
+    await step("방송 구성 편집: 단계 복제·삭제·저장", async () => {
+      await page.click(".nav >> text=방송 구성");
+      await page.waitForSelector(".editor-head input");
+      if ((await page.locator(".step").count()) !== 2) throw new Error("마법사가 만든 단계 수가 다릅니다");
       await page.click('button[aria-label="2단계 복제"]');
       if ((await page.locator(".step").count()) !== 3) throw new Error("단계 복제가 되지 않았습니다");
       await page.click('button[aria-label="3단계 삭제"]');
       await page.click(".editor-foot >> text=저장");
-      await page.waitForSelector(".plist-item >> text=점심 안내");
-      await shot("02-program");
+      await page.waitForSelector("text=저장했습니다.");
     });
 
     await step("전체 미리듣기 → 정지", async () => {
@@ -56,20 +96,11 @@ async function main() {
 
     await step("소리 파일 관리: 쓰는 파일은 삭제 불가", async () => {
       await page.click("text=올린 소리 파일 1개 관리");
-      await page.waitForSelector("dialog >> text=점심 안내");
+      await page.waitForSelector("dialog >> text=점심 방송");
       if (!(await page.locator("dialog .link:has-text('삭제')").isDisabled())) throw new Error("쓰는 파일인데 삭제할 수 있습니다");
       await page.click("dialog >> text=닫기");
-    });
-
-    await step("회차 추가(매일)", async () => {
       await page.click(".nav >> text=시간표");
-      await page.click(".empty >> text=회차 추가");
-      await page.fill('dialog input[placeholder="예: 점심 안내"]', "점심 안내");
-      await page.fill("dialog input[type=time]", "23:59");
-      for (const d of ["토", "일"]) await page.click(`dialog .toggles >> text=${d}`);
-      await page.click("dialog >> text=저장");
-      await page.waitForSelector(".tt .rowhd >> text=점심 안내");
-      await shot("03-timetable");
+      await page.waitForSelector(".tt .rowhd");
     });
 
     await step("같은 시각 회차 겹침 경고", async () => {

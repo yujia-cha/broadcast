@@ -101,3 +101,8 @@ def test_media_names_cannot_escape_or_use_device_names(name):
     from jeongsi.models import is_safe_media_name
 
     assert is_safe_media_name(name) is False
+
+
+def test_slot_end_before_start_is_rejected():
+    with pytest.raises(ValidationError, match="끝나는 날"):
+        Slot(name="회차", time="09:00", weekdays=[0], program_id="p1", start_date=date(2026, 12, 2), end_date=date(2026, 12, 1))

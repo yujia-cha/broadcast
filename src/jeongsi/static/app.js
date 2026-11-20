@@ -4,8 +4,9 @@ import { h, icon, openDialog, toast, toastError } from "./ui.js";
 import * as timetable from "./views/timetable.js";
 import * as programs from "./views/programs.js";
 import * as settingsView from "./views/settings.js";
+import * as wizard from "./views/wizard.js";
 
-const VIEWS = { timetable, programs, settings: settingsView };
+const VIEWS = { timetable, programs, settings: settingsView, new: wizard };
 const POLL_MS = 1000;
 
 export const ctx = {
@@ -203,6 +204,7 @@ async function start() {
     btn.addEventListener("click", () => navigate(btn.dataset.view));
   }
   document.getElementById("auto-switch").addEventListener("click", toggleAuto);
+  document.getElementById("new-btn").addEventListener("click", () => navigate("new"));
   document.getElementById("update-btn").addEventListener("click", openUpdateDialog);
   window.jeongsiOpenUpdate = openUpdateDialog; // 트레이 메뉴의 "새 버전 설치"에서 부른다
   window.addEventListener("hashchange", () => {

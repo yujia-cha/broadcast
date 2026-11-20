@@ -94,3 +94,21 @@ def test_occurrences_between_spans_midnight(config):
     config.slots[0].time = "00:00"
     start, end = datetime(2026, 11, 19, 23, 59, 30), datetime(2026, 11, 20, 0, 0, 30)
     assert [(o.date, o.slot_id) for o in occurrences_between(config, start, end)] == [(FRI, "morning")]
+
+
+def test_slot_start_and_end_dates_limit_days(config):
+    # Arrange: 점심 회차는 11/18(수)~11/19(목)에만
+    config.slots[1].start_date = WED
+    config.slots[1].end_date = date(2026, 11, 19)
+    # Act / Assert
+    assert "lunch" not in [o.slot_id for o in resolve_day(config, MON)]
+    assert "lunch" in [o.slot_id for o in resolve_day(config, WED)]
+    assert "lunch" in [o.slot_id for o in resolve_day(config, date(2026, 11, 19))]
+    assert "lunch" not in [o.slot_id for o in resolve_day(config, FRI)]
+
+
+def test_next_occurrence_respects_future_start(config):
+    config.slots = [config.slots[0]]
+    config.slots[0].start_date = date(2026, 12, 1)
+    nxt = next_occurrence(config, datetime(2026, 11, 20, 7, 0))
+    assert nxt.date == date(2026, 12, 1)

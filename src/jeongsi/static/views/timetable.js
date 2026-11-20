@@ -94,10 +94,8 @@ function renderGrid() {
     mainEl.replaceChildren(bar,
       h("div", { class: "card empty" },
         h("h3", null, "아직 회차가 없습니다"),
-        noPrograms ? h("p", null, "먼저 내보낼 방송 구성을 만드세요.") : null,
-        noPrograms
-          ? h("button", { class: "btn pri", on: { click: () => ctx.go("programs") } }, "방송 구성 만들기")
-          : h("button", { class: "btn pri", on: { click: () => openSlotDialog(null) } }, icon("plus"), "회차 추가"),
+
+        h("button", { class: "btn pri", on: { click: () => ctx.go("new") } }, icon("plus"), "새 방송 만들기"),
       ),
     );
     return;
@@ -123,7 +121,7 @@ function renderGrid() {
     grid.append(
       h("div", { class: `rowhd${slot.enabled ? "" : " disabled"}` },
         h("b", null, slot.name),
-        h("span", null, `${slot.time} · ${weekdaySummary(slot.weekdays)}${slot.enabled ? "" : " · 꺼짐"}`),
+        h("span", null, `${slot.time} · ${weekdaySummary(slot.weekdays)}${periodText(slot)}${slot.enabled ? "" : " · 꺼짐"}`),
         h("button", { class: "link", on: { click: () => openSlotDialog(slot) } }, "매주 일정 편집"),
       ),
     );
@@ -169,6 +167,13 @@ function renderCell(row, cell, day) {
       h("span", { class: "p" }, detail),
     ),
   );
+}
+
+function periodText(slot) {
+  if (slot.start_date && slot.end_date) return ` · ${fmtMonthDay(slot.start_date)}~${fmtMonthDay(slot.end_date)}`;
+  if (slot.start_date) return ` · ${fmtMonthDay(slot.start_date)}부터`;
+  if (slot.end_date) return ` · ${fmtMonthDay(slot.end_date)}까지`;
+  return "";
 }
 
 function liveProgress() {
@@ -479,8 +484,8 @@ function openSlotDialog(slot) {
     return;
   }
   const isNew = !slot;
-  const draft = slot ? { ...slot, weekdays: [...slot.weekdays] } : { name: "", time: "09:00", weekdays: [0, 1, 2, 3, 4], program_id: ctx.programs[0].id, enabled: true };
-  let nameEl, timeEl, progEl, enabledEl, errEl, dayBox, confirmBox;
+  const draft = slot ? { ...slot, weekdays: [...slot.weekdays] } : { name: "", time: "09:00", weekdays: [0, 1, 2, 3, 4], program_id: ctx.programs[0].id, enabled: true, start_date: null, end_date: null };
+  let nameEl, timeEl, progEl, enabledEl, errEl, dayBox, confirmBox, startEl, endEl;
   let overlapConfirmed = null;
 
   const paintDays = () =>
@@ -505,6 +510,10 @@ function openSlotDialog(slot) {
       h("div", { class: "field" }, h("span", null, "요일"), (dayBox = h("div", { class: "toggles", role: "group", "aria-label": "요일" }))),
       h("label", { class: "field" }, h("span", null, "방송 구성"),
         (progEl = h("select", { class: "input" }, ctx.programs.map((p) => h("option", { value: p.id, selected: p.id === draft.program_id }, `${p.name} · ${p.summary}`))))),
+      h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s3)" } },
+        h("label", { class: "field" }, h("span", null, "시작일 (선택)"), (startEl = h("input", { class: "input", type: "date", value: draft.start_date || "" }))),
+        h("label", { class: "field" }, h("span", null, "종료일 (선택)"), (endEl = h("input", { class: "input", type: "date", value: draft.end_date || "" }))),
+      ),
       h("label", { style: { display: "flex", gap: "var(--s2)", alignItems: "center" } },
         (enabledEl = h("input", { type: "checkbox", checked: draft.enabled, style: { width: "18px", height: "18px", accentColor: "var(--accent)" } })),
         "이 회차 사용"),
@@ -524,7 +533,8 @@ function openSlotDialog(slot) {
 
   async function save() {
     errEl.textContent = "";
-    const body = { name: nameEl.value.trim(), time: timeEl.value, weekdays: draft.weekdays, program_id: progEl.value, enabled: enabledEl.checked };
+    const body = { name: nameEl.value.trim(), time: timeEl.value, weekdays: draft.weekdays, program_id: progEl.value, enabled: enabledEl.checked, start_date: startEl.value || null, end_date: endEl.value || null };
+    if (body.start_date && body.end_date && body.end_date < body.start_date) return (errEl.textContent = "종료일이 시작일보다 빠릅니다.");
     if (!body.name) return (errEl.textContent = "이름을 입력하세요.");
     if (!body.time) return (errEl.textContent = "시각을 입력하세요.");
     if (!body.weekdays.length) return (errEl.textContent = "요일을 하나 이상 고르세요.");

@@ -33,6 +33,7 @@ const ICONS = {
   skip: '<path d="m5 5 10 7-10 7z"/><path d="M19 5v14"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
   left: '<path d="m15 18-6-6 6-6"/>',
   right: '<path d="m9 18 6-6-6-6"/>',
   up: '<path d="m18 15-6-6-6 6"/>',

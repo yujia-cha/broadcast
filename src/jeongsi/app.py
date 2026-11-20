@@ -194,6 +194,7 @@ def create_app(services: Services) -> FastAPI:
             "warning": s.store.load_warning,
             "voices_ok": any(_is_korean(v) for v in s.voices()),
             "theme": config.settings.theme,
+            "ducks": config.settings.pause_media or config.settings.mute_others,
             "has_programs": bool(config.programs),
             "can_update": s.shell.exe_path() is not None,
         }
@@ -284,6 +285,41 @@ def create_app(services: Services) -> FastAPI:
 
         update(mutate)
         return Response(status_code=204)
+
+    @app.post("/api/broadcasts", status_code=201)
+    def create_broadcast(body: dict = Body(...)):
+        """새 방송 만들기: 방송 구성과 회차를 한 번에 만든다. 둘 중 하나라도 잘못되면 아무것도 만들지 않는다."""
+        name = str(body.get("name") or "").strip()
+        program = Program.model_validate({"name": name, "steps": body.get("steps") or []})
+        _check_files_exist(program)
+        slot = Slot.model_validate({
+            "name": name,
+            "time": body.get("time"),
+            "weekdays": body.get("weekdays") or [],
+            "program_id": program.id,
+            "start_date": body.get("start_date"),
+            "end_date": body.get("end_date"),
+        })
+
+        def mutate(c: Config):
+            c.programs.append(program)
+            c.slots.append(slot)
+
+        update(mutate)
+        nxt = next((o for o in _upcoming_for(slot.id)), None)
+        return {"program": program.model_dump(mode="json"), "slot": slot.model_dump(mode="json"), "next": nxt}
+
+    def _upcoming_for(slot_id: str):
+        from datetime import timedelta
+
+        from .schedule import resolve_day
+
+        now = s.now()
+        for offset in range(60):
+            day = now.date() + timedelta(days=offset)
+            for occ in resolve_day(cfg(), day):
+                if occ.slot_id == slot_id and not occ.skipped and occ.at > now:
+                    yield {"date": occ.date.isoformat(), "time": occ.time.strftime("%H:%M")}
 
     # 쉬는 날·예외 -------------------------------------------------------------
     @app.post("/api/days-off", status_code=201)

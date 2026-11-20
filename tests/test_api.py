@@ -301,3 +301,38 @@ def test_update_apply_twice_is_refused(env):
     services.updater.mark_downloading()
     res = client.post("/api/update/apply", headers=HEADERS)
     assert res.status_code == 409 and "진행" in res.json()["error"]
+
+
+def test_create_broadcast_makes_program_and_slot(env):
+    # Arrange
+    client, services, _ = env
+    body = {
+        "name": "하교 음악",
+        "steps": [{"kind": "tts", "text": "하교 시간입니다.", "repeat": 2}, {"kind": "audio", "file": "a1b2c3d4-chime.wav"}],
+        "time": "16:30", "weekdays": [0, 1, 2, 3, 4], "start_date": "2026-11-23",
+    }
+    # Act
+    res = client.post("/api/broadcasts", json=body, headers=HEADERS)
+    # Assert
+    assert res.status_code == 201
+    data = res.json()
+    assert data["next"] == {"date": "2026-11-23", "time": "16:30"}
+    cfg = services.store.config
+    slot = cfg.slot(data["slot"]["id"])
+    assert slot.program_id == data["program"]["id"] and cfg.program(slot.program_id).steps[0].repeat == 2
+
+
+@pytest.mark.parametrize("bad", [
+    {"time": "25:00"},
+    {"weekdays": []},
+    {"steps": []},
+    {"name": " "},
+    {"end_date": "2026-11-01", "start_date": "2026-11-30"},
+])
+def test_create_broadcast_is_all_or_nothing(env, bad):
+    client, services, _ = env
+    body = {"name": "새 방송", "steps": [{"kind": "tts", "text": "안내"}], "time": "09:00", "weekdays": [0], **bad}
+    before = (len(services.store.config.programs), len(services.store.config.slots))
+    res = client.post("/api/broadcasts", json=body, headers=HEADERS)
+    assert res.status_code == 422
+    assert (len(services.store.config.programs), len(services.store.config.slots)) == before

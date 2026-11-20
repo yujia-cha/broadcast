@@ -114,6 +114,8 @@ class Slot(_Model):
     weekdays: list[int] = Field(min_length=1, max_length=7)
     program_id: str
     enabled: bool = True
+    start_date: date | None = None  # 이 날부터 방송(없으면 바로)
+    end_date: date | None = None  # 이 날까지 방송(없으면 계속)
 
     @field_validator("time")
     @classmethod
@@ -134,6 +136,15 @@ class Slot(_Model):
         if any(day < 0 or day > 6 for day in value):
             raise ValueError("요일 값이 올바르지 않습니다.")
         return sorted(set(value))
+
+    @model_validator(mode="after")
+    def _check_period(self) -> Slot:
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("끝나는 날이 시작하는 날보다 빠릅니다.")
+        return self
+
+    def active_on(self, day: date) -> bool:
+        return (self.start_date is None or day >= self.start_date) and (self.end_date is None or day <= self.end_date)
 
 
 class DayOff(_Model):
