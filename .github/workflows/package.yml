@@ -58,6 +58,8 @@ jobs:
           tools/launcher.py
 
       - name: 배포 스모크 테스트
+        env:
+          PYTHONUTF8: "1"
         run: python tools/smoke_exe.py dist/JeongsiBroadcast.exe
 
       - name: SHA-256 파일 만들기

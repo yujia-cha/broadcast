@@ -193,6 +193,8 @@ def update_flow(exe: Path, work: Path) -> str:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):  # Windows 콘솔 기본 인코딩(cp1252)은 한글을 못 쓴다
+        stream.reconfigure(encoding="utf-8", errors="replace")
     exe = Path(sys.argv[1]).resolve()
     assert exe.exists(), exe
     print(f"exe: {exe} ({exe.stat().st_size / 1024 / 1024:.1f} MB)")
