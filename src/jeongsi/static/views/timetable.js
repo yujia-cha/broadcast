@@ -9,7 +9,7 @@ import {
 } from "../visual.js";
 
 const SNAP = 5;
-const MIN_HOUR_PX = 44; // 이보다 좁으면 블록 이름이 사라지므로 대신 스크롤한다
+const MIN_HOUR_PX = 50; // 이보다 좁으면 블록 이름이 사라지므로 대신 스크롤한다
 const DRAG_START_PX = 10; // 누르다 손이 조금 흔들려도 시각이 바뀌지 않게
 const MAX_HOUR_PX = 64;
 const BLOCK_PX = 46;
@@ -159,8 +159,9 @@ function renderGrid() {
   const body = h("div", { class: "cal-body", style: { gridTemplateColumns: cols } }, axis, columns);
   mainEl.replaceChildren(bar, h("div", { class: "cal" }, head, body));
   if (!st.scrolled) {
-    // 처음 열 때 다음 방송(없으면 지금 선)이 보이게 한다
+    // 처음 열 때 다음 방송(없으면 지금 선)이 보이게 한다. 좁은 창에선 위의 지금 패널이 가려지므로 하지 않는다
     st.scrolled = true;
+    if (window.innerWidth > 1100)
     (mainEl.querySelector(".cblock.next, .cblock.live") || mainEl.querySelector(".cal-now"))?.scrollIntoView({ block: "nearest" });
   }
 }
@@ -169,7 +170,7 @@ function block(row, cell, from, index, count) {
   const bh = blockPx();
   const top = ((toMinutes(cell.time) - from) / 60) * st.hourPx - bh / 2;
   const el = h("button", {
-    class: `cblock ${cell.status}${cell.changed && cell.status !== "off" ? " chg" : ""}${bh < 40 ? " compact" : ""}`,
+    class: `cblock ${cell.status}${cell.changed && cell.status !== "off" ? " chg" : ""}${bh < 44 ? " compact" : ""}`,
     style: { top: `${top}px`, height: `${bh}px`, left: `calc(${(index * 100) / count}% + 3px)`, width: `calc(${100 / count}% - 6px)` },
     "aria-label": `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}`,
   },
@@ -234,7 +235,8 @@ async function moveTime(row, cell, hhmm, undoable = false) {
     }
     closePopover();
     await loadWeek();
-    const undo = { label: "되돌리기", fn: () => moveTime(row, { ...cell, override: cell.override ?? { action: "change" } }, cell.time) };
+    if (undoable === "undo") return toast("되돌렸습니다.");
+    const undo = { label: "되돌리기", fn: () => moveTime(row, { ...cell, time: hhmm, override: { action: "change" } }, cell.time, "undo") };
     toast(`${fmtDate(cell.date)} ${row.slot.name} ${cell.time} → ${hhmm}`, undoable ? { action: undo } : {});
   } catch (err) {
     toastError(err);
@@ -374,7 +376,7 @@ function nextCard(status) {
     ruler,
     h("div", { class: "ia-row" },
       tag(iconAction("play", "지금", () => broadcastNow(n.program_id)), "now"),
-      tag(iconAction("ban", "이번 끄기", skipNext), "skip-next"),
+      tag(iconAction("ban", "이번만 끄기", skipNext), "skip-next"),
     ),
     skip ? undoChip(skip) : null,
   );
@@ -459,7 +461,7 @@ export function openSlotDialog(slot) {
       ? h("div", { class: "wz-stack" },
           weekdayPicker(draft.weekdays, (v) => (draft.weekdays = v)),
           periodField())
-      : multiDateCalendar({ dates: draft.dates, min: addDays(todayIso(), -365) }, (v) => (draft.dates = v)));
+      : multiDateCalendar({ dates: draft.dates, min: todayIso() }, (v) => (draft.dates = v)));
   };
   // 기간: 평소에는 한 줄 요약, 누르면 달력(끝 없음 ∞). 달력을 고르는 동안에는 요약만 바꾼다
   function periodField() {
@@ -514,6 +516,13 @@ export function openSlotDialog(slot) {
     if (!body.name) return (errEl.textContent = "이름을 입력하세요.");
     if (weekly && !body.weekdays.length) return (errEl.textContent = "요일을 하나 이상 고르세요.");
     if (!weekly && !body.dates.length) return (errEl.textContent = "날짜를 하나 이상 고르세요.");
+    if (!weekly && body.enabled) {
+      // 고른 날이 모두 지났거나 쉬는 날이면 저장해도 나가지 않는다
+      try {
+        const res = await post("/api/broadcasts/check", { time: body.time, dates: body.dates });
+        if (!res.dates.some((x) => x.state === "ok")) return (errEl.textContent = "고른 날에는 방송이 나가지 않아요(지났거나 쉬는 날). 다른 날을 고르세요.");
+      } catch { /* 확인하지 못하면 그대로 저장 */ }
+    }
     if (body.start_date && body.end_date && body.end_date < body.start_date) return (errEl.textContent = "종료일이 시작일보다 빠릅니다.");
     const clash = (ctx.weekSlots || []).filter((s) => s.id !== slot.id && s.enabled && body.enabled && s.time === body.time
       && (weekly && !s.dates?.length ? s.weekdays.some((d) => body.weekdays.includes(d)) : (s.dates || []).some((d) => body.dates.includes(d))));

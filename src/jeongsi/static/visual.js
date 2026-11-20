@@ -64,29 +64,29 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
   let lo = from, hi = to;
   const display = h("div", { class: "tp-display" });
   const pin = h("button", { class: "tp-pin", role: "slider", "aria-label": "시각", "aria-valuemin": 0, "aria-valuemax": 1435 });
-  const track = h("div", { class: "tp-track" });
+  const tickBox = h("span", { class: "tp-ticks", "aria-hidden": "true" });
+  const track = h("div", { class: "tp-track" }, tickBox, pin);
+  let dragging = false;
+  let painted = false;
   const ticks = () => {
     const every = hi - lo > 16 * 60 ? 6 : 3;
-    track.replaceChildren(
-      ...Array.from({ length: (hi - lo) / 60 + 1 }, (_, i) => {
-        const hour = lo / 60 + i;
-        return h("span", { class: "tp-tick", style: { left: `${(i * 60 * 100) / (hi - lo)}%` } }, hour % every === 0 ? String(hour) : "");
-      }),
-      pin,
-    );
+    tickBox.replaceChildren(...Array.from({ length: (hi - lo) / 60 + 1 }, (_, i) => {
+      const hour = lo / 60 + i;
+      return h("span", { class: "tp-tick", style: { left: `${(i * 60 * 100) / (hi - lo)}%` } }, hour % every === 0 ? String(hour) : "");
+    }));
   };
   const set = (m, done = false) => {
     minutes = Math.min(1435, Math.max(0, Math.round(m / 5) * 5));
-    // 기본 눈금(6~22시) 밖의 시각이면 하루 전체로 넓혀 핀이 거짓 위치에 붙지 않게 한다
+    // 기본 눈금(6~22시) 밖의 시각이면 하루 전체로 넓혀 핀이 거짓 위치에 붙지 않게 한다(끄는 중에는 눈금 고정)
     const [nlo, nhi] = minutes < from || minutes > to ? [0, 24 * 60] : [from, to];
-    if (nlo !== lo || nhi !== hi || !track.firstChild) { lo = nlo; hi = nhi; ticks(); }
+    if (!dragging && (nlo !== lo || nhi !== hi || !painted)) { lo = nlo; hi = nhi; painted = true; ticks(); }
     const hhmm = toHHMM(minutes);
     display.replaceChildren(
-      stepBtn("up", "1시간 늦게", () => set(minutes + 60), minutes + 60 > 1435),
+      stepBtn("left", "1시간 일찍", () => set(minutes - 60), minutes - 60 < 0, "−1시간"),
       h("span", { class: "tp-time" }, hhmm),
-      stepBtn("down", "1시간 일찍", () => set(minutes - 60), minutes - 60 < 0),
+      stepBtn("right", "1시간 늦게", () => set(minutes + 60), minutes + 60 > 1435, "+1시간"),
     );
-    pin.style.left = `${((minutes - lo) * 100) / (hi - lo)}%`;
+    pin.style.left = `${((Math.min(hi, Math.max(lo, minutes)) - lo) * 100) / (hi - lo)}%`;
     pin.setAttribute("aria-valuenow", String(minutes));
     pin.setAttribute("aria-valuetext", hhmm);
     onChange(hhmm, done);
@@ -97,17 +97,23 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
   };
   track.addEventListener("pointerdown", (e) => {
     track.setPointerCapture(e.pointerId);
+    dragging = true;
     fromPointer(e);
     const move = (ev) => fromPointer(ev);
-    const up = () => { track.removeEventListener("pointermove", move); track.removeEventListener("pointerup", up); pin.focus(); };
+    const up = () => {
+      track.removeEventListener("pointermove", move); track.removeEventListener("pointerup", up);
+      dragging = false;
+      set(minutes);
+      pin.focus();
+    };
     track.addEventListener("pointermove", move);
     track.addEventListener("pointerup", up);
   });
   pin.addEventListener("keydown", (e) => {
     const step = { ArrowRight: 5, ArrowUp: 5, ArrowLeft: -5, ArrowDown: -5, PageUp: 60, PageDown: -60 }[e.key];
     if (step) { e.preventDefault(); set(minutes + step); }
-    if (e.key === "Home") { e.preventDefault(); set(lo); }
-    if (e.key === "End") { e.preventDefault(); set(Math.min(hi, 1435)); }
+    if (e.key === "Home") { e.preventDefault(); set(0); }
+    if (e.key === "End") { e.preventDefault(); set(1435); }
     if (e.key === "Enter") { e.preventDefault(); onChange(toHHMM(minutes), true); }
   });
   const wrap = h("div", { class: "tp" }, display, h("div", { class: "tp-scale" }, icon("sun"), track, icon("moon")));
@@ -115,8 +121,9 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
   return wrap;
 }
 
-function stepBtn(dir, label, fn, disabled = false) {
-  return h("button", { class: "ibtn tp-step", "aria-label": label, disabled, on: { click: fn } }, icon(dir));
+function stepBtn(dir, label, fn, disabled, text) {
+  return h("button", { type: "button", class: "btn sm tp-step", "aria-label": label, disabled, on: { click: fn } },
+    dir === "left" ? icon("left") : null, text, dir === "right" ? icon("right") : null);
 }
 
 // 횟수 고르기: 아이콘을 몇 개 켤지 -------------------------------------------------------
@@ -153,7 +160,7 @@ export function rangeCalendar({ start, end, min, allowOpen = true, marked = new 
   let open = allowOpen && !end; // 끝 없음
   let month = parseDate(view || s || min); // view: 처음 보여 줄 달(그 달의 아무 날)
   month.setDate(1);
-  let picking = s && allowOpen ? "start" : s ? "end" : "start";
+  let picking = s ? "end" : "start";
   const wrap = h("div", { class: "rc" });
   const paint = () => {
     const first = new Date(month);
@@ -167,7 +174,7 @@ export function rangeCalendar({ start, end, min, allowOpen = true, marked = new 
       const inRange = !!s && iso >= s && (open ? true : iso <= e);
       const mark = marked.get(iso);
       const cls = ["rc-day", inRange ? "in" : "", iso === s ? "start" : "", !open && iso === e ? "end" : "", mark !== undefined ? "marked" : ""].join(" ");
-      days.push(h("button", { class: cls, disabled, title: mark || null, "aria-label": mark !== undefined ? `${iso} 이미 쉬는 날` : iso, "aria-pressed": String(iso === s || (!open && iso === e)), on: { click: () => pick(iso) } }, String(d)));
+      days.push(h("button", { class: cls, disabled, title: mark || null, "data-date": iso, "aria-label": mark !== undefined ? `${spoken(iso)}, 이미 쉬는 날` : spoken(iso), "aria-pressed": String(iso === s || (!open && iso === e)), on: { click: () => pick(iso) } }, String(d)));
     }
     wrap.replaceChildren(
       h("div", { class: "rc-head" },
@@ -202,10 +209,11 @@ export function rangeCalendar({ start, end, min, allowOpen = true, marked = new 
 
 // 특정 날짜 여러 개 고르기: 달력에서 누를 때마다 켜고 끈다 ----------------------------------------
 const DATE_STATE = { past: "지남", off: "쉬는 날" };
+const spoken = (iso) => { const d = parseDate(iso); return `${d.getMonth() + 1}월 ${d.getDate()}일 ${WEEKDAYS[(d.getDay() + 6) % 7]}요일`; };
 export function multiDateCalendar({ dates = [], min }, onChange) {
   let picked = new Set(dates);
   let states = {};
-  let month = parseDate(dates[0] || min);
+  let month = parseDate(dates.find((x) => x >= min) || min);
   month.setDate(1);
   const wrap = h("div", { class: "rc" });
   const short = (iso) => { const d = parseDate(iso); return `${d.getMonth() + 1}/${d.getDate()} ${WEEKDAYS[(d.getDay() + 6) % 7]}`; };
@@ -216,7 +224,7 @@ export function multiDateCalendar({ dates = [], min }, onChange) {
     for (let d = 1; d <= last; d++) {
       const iso = isoDate(new Date(month.getFullYear(), month.getMonth(), d));
       const on = picked.has(iso);
-      cells.push(h("button", { class: `rc-day${on ? " start" : ""}${on && DATE_STATE[states[iso]] ? " warn" : ""}`, disabled: iso < min, "aria-label": iso, "aria-pressed": String(on), on: { click: () => toggle(iso) } }, String(d)));
+      cells.push(h("button", { class: `rc-day${on ? " start" : ""}${on && DATE_STATE[states[iso]] ? " warn" : ""}`, disabled: iso < min, "data-date": iso, "aria-label": spoken(iso), "aria-pressed": String(on), on: { click: () => toggle(iso) } }, String(d)));
     }
     const sorted = [...picked].sort();
     wrap.replaceChildren(
@@ -229,7 +237,7 @@ export function multiDateCalendar({ dates = [], min }, onChange) {
       h("div", { class: "date-chips", "aria-live": "polite" },
         sorted.map((iso) => h("span", { class: `date-chip${DATE_STATE[states[iso]] ? ` ${states[iso]}` : ""}` }, short(iso),
           DATE_STATE[states[iso]] ? h("b", { class: "date-why" }, DATE_STATE[states[iso]]) : null,
-          h("button", { class: "off-x", "aria-label": `${iso} 빼기`, on: { click: () => toggle(iso) } }, icon("x"))))),
+          h("button", { class: "off-x", "aria-label": `${spoken(iso)} 빼기`, on: { click: () => toggle(iso) } }, icon("x"))))),
     );
   };
   const toggle = (iso) => {
@@ -263,11 +271,11 @@ export function mediaPicker({ media, selected, onPick, onPreview, upload, collap
     h("button", { class: "ibtn wz-file-play", "aria-label": `${m.display} 듣기`, on: { click: () => onPreview(m) } }, icon("play")));
   const paint = () => {
     const shown = open ? media : media.filter((m) => m.name === selected);
-    wrap.replaceChildren(
+    wrap.replaceChildren(...[
       upload,
       h("div", { class: "wz-files", role: "radiogroup", "aria-label": label }, shown.map(row)),
       open ? null : h("button", { class: "btn sm ghost wz-more", on: { click: () => { open = true; paint(); } } }, icon("down"), `다른 파일 ${media.length - shown.length}개`),
-    );
+    ].filter(Boolean));
   };
   paint();
   return wrap;
@@ -283,8 +291,8 @@ export function dayRuler(times, nowMinutes, nextTime) {
     h("i", { class: "ruler-past", style: { width: pos(nowMinutes) } }),
     mins.map((m, i) => h("span", { class: `ruler-dot${times[i] === nextTime ? " next" : ""}${m <= nowMinutes ? " past" : ""}`, style: { left: pos(m) } })),
     h("span", { class: "ruler-now", style: { left: pos(nowMinutes) } }),
-    h("small", { class: "ruler-l" }, String(from / 60)),
-    h("small", { class: "ruler-r" }, String(to / 60)),
+    h("small", { class: "ruler-l" }, `${from / 60}시`),
+    h("small", { class: "ruler-r" }, `${to / 60}시`),
   );
 }
 

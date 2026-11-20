@@ -69,7 +69,7 @@ function renderList() {
       h("button", { class: "plist-item", "aria-current": String(p.id === st.selectedId), on: { click: () => switchTo(p) } },
         h("b", null, p.name),
         strip(p.steps, { size: "xs" }),
-        h("span", null, `${fmtDuration(p.seconds)}${p.used_by.length ? ` · ${p.used_by.join(", ")}` : ""}`),
+        h("span", null, `${fmtDuration(p.seconds)}${p.used_by.length ? ` · 예약 ${p.used_by.length}개` : " · 예약 없음"}`),
       )),
     h("button", { class: "plist-add", "aria-label": "새 방송 구성", on: { click: () => switchTo(null) } }, icon("plus")),
     h("button", { class: "btn ghost sm", on: { click: openMediaDialog } }, icon("music"), `음악 파일 ${ctx.media.length}`),
@@ -172,7 +172,7 @@ function stepPanel(step, i) {
     h("div", { class: "ia-row" },
       iconAction(st.previewing === step.id ? "stop" : "play", st.previewing === step.id ? "정지" : "듣기", () => (st.previewing === step.id ? stopPreview() : preview(step))),
       iconAction("copy", "복제", () => duplicate(i), { disabled: d.steps.length >= 30 }),
-      iconAction("trash", "빼기", () => { d.steps.splice(i, 1); st.sel = Math.max(0, i - 1); renderEditor(); }, { disabled: d.steps.length === 1 }),
+      iconAction("x", "빼기", () => { d.steps.splice(i, 1); st.sel = Math.max(0, i - 1); renderEditor(); }, { disabled: d.steps.length === 1 }),
     ),
   );
 }
@@ -244,6 +244,7 @@ async function upload(input, step) {
     step.file = media.name;
     step.label = media.display.replace(/\.[^.]+$/, "").slice(0, 20);
     renderList();
+    toast(`${media.display}로 바꿨습니다.`);
   } catch (err) {
     toastError(err);
   }
@@ -332,32 +333,54 @@ async function removeProgram(program) {
   }
 }
 
-// 음악 파일 관리 -----------------------------------------------------------------
+// 음악 파일 관리: 듣기·올리기·지우기(쓰는 파일은 '사용 중' 표시, 지우기 전 확인) --------------------------------
 function openMediaDialog() {
-  let list, errEl;
+  let list, errEl, uploadBtn;
   const usedBy = (name) => ctx.programs.filter((p) => p.steps.some((s) => s.kind === "audio" && s.file === name)).map((p) => p.name);
+  const input = h("input", { type: "file", accept: ".mp3,.wav,.flac,.ogg,audio/*", hidden: true, on: { change: async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    uploadBtn.disabled = true;
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const m = await api("POST", "/api/media", form);
+      await ctx.loadMedia();
+      paint();
+      renderList();
+      toast(`${m.display}을(를) 올렸습니다.`);
+    } catch (err) {
+      errEl.textContent = err.message;
+    } finally {
+      uploadBtn.disabled = false;
+      input.value = "";
+    }
+  } } });
+  const remove = async (m) => {
+    if (!(await confirmDialog({ title: `'${m.display}' 지우기`, confirm: "지우기", danger: true }))) return;
+    try {
+      await del(`/api/media/${encodeURIComponent(m.name)}`);
+      await ctx.loadMedia();
+      paint();
+      renderList();
+      toast("지웠습니다.");
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  };
   const paint = () => {
+    errEl.textContent = "";
     list.replaceChildren(
       ...(ctx.media.length
         ? ctx.media.map((m) => {
             const users = usedBy(m.name);
             return h("div", { class: "wz-file media-row" },
-              h("span", { class: "wz-file-i blk-audio" }, icon("music")),
-              h("span", { class: "wz-file-n" }, m.display, users.length ? h("small", { class: "hint" }, ` · ${users.join(", ")}`) : null),
+              h("button", { class: "ibtn wz-file-play", "aria-label": `${m.display} 듣기`, on: { click: () => post("/api/preview", { kind: "audio", file: m.name }).then(() => toast(`${m.display} 듣는 중…`)).catch(toastError) } }, icon("play")),
+              h("span", { class: "wz-file-n" }, m.display),
               h("small", null, m.seconds ? fmtDuration(m.seconds) : ""),
-              h("button", {
-                class: "off-x", "aria-label": `${m.display} 삭제`, disabled: users.length > 0, title: users.length ? "사용 중" : null,
-                on: { click: async () => {
-                  try {
-                    await del(`/api/media/${encodeURIComponent(m.name)}`);
-                    await ctx.loadMedia();
-                    paint();
-                    renderList();
-                  } catch (err) {
-                    errEl.textContent = err.message;
-                  }
-                } },
-              }, icon("trash")),
+              users.length
+                ? h("span", { class: "in-use", title: users.join(", ") }, "사용 중")
+                : h("button", { class: "ibtn", "aria-label": `${m.display} 지우기`, on: { click: () => remove(m) } }, icon("trash")),
             );
           })
         : [h("p", { class: "hint" }, "올린 파일이 없습니다.")]),
@@ -366,6 +389,8 @@ function openMediaDialog() {
   openDialog("음악 파일", (close) =>
     h("div", { class: "dlg" },
       h("h2", null, "음악 파일"),
+      (uploadBtn = h("button", { class: "wz-file wz-upload", on: { click: () => input.click() } }, h("span", { class: "wz-file-i" }, icon("upload")), h("span", null, "파일 올리기"))),
+      input,
       (list = h("div", { style: { display: "grid", gap: "var(--s2)", maxHeight: "360px", overflow: "auto" } })),
       (errEl = h("p", { class: "err", role: "alert" })),
       h("div", { class: "dlg-foot" }, h("button", { class: "btn", on: { click: () => close() } }, "닫기")),

@@ -147,8 +147,8 @@ async function main() {
       await page.waitForSelector(".cal-col.today .cblock.next");
     });
 
-    await step("이번 끄기 → 되돌리기", async () => {
-      await page.click(".rail .ia >> text=이번 끄기");
+    await step("이번만 끄기 → 되돌리기", async () => {
+      await page.click(".rail .ia >> text=이번만 끄기");
       await page.waitForSelector(".undo-chip");
       await page.click(".undo-chip");
       await toast("되돌렸습니다.");
@@ -183,6 +183,16 @@ async function main() {
       await page.click(".cal-col.today .cblock.next");
       await page.click(".pop .ia >> text=편집");
       await page.waitForSelector("dialog .wdp");
+      // 기간: 시작이 있으면 다음 누름은 끝날
+      await page.click("dialog .period .chip-btn");
+      await page.locator("dialog .rc-day:not([disabled])").nth(3).click();
+      await page.waitForSelector("dialog .period .chip-btn >> text=까지");
+      await page.click("dialog .period >> text=기간 없애기");
+      // 특정 날짜 달력은 이번 달부터
+      await page.click("dialog .mode-seg >> text=특정 날짜");
+      const month = await page.evaluate(() => new Date().getMonth() + 1);
+      await page.waitForSelector(`dialog .rc-head b >> text=${month}월`);
+      await page.click("dialog .mode-seg >> text=매주");
       await page.click("dialog >> button:has-text('저장')");
       await toast("저장했습니다.");
     });
@@ -209,7 +219,8 @@ async function main() {
 
     await step("음악 파일: 쓰는 파일은 지울 수 없음", async () => {
       await page.click(".plist >> text=음악 파일 1");
-      if (!(await page.locator("dialog .off-x").isDisabled())) throw new Error("쓰는 파일인데 지울 수 있습니다");
+      await page.waitForSelector("dialog .in-use >> text=사용 중");
+      if (await page.locator('dialog button[aria-label$="지우기"]').count()) throw new Error("쓰는 파일인데 지울 수 있습니다");
       await page.click("dialog >> text=닫기");
     });
 
@@ -268,7 +279,7 @@ async function main() {
       await page.click(".wz-tile >> text=특정 날짜");
       await page.click('.wz-active button[aria-label="다음 달"]');
       const day = page.locator(".wz-active .rc-day:not([disabled])").nth(5);
-      const iso = await day.getAttribute("aria-label");
+      const iso = await day.getAttribute("data-date");
       await page.evaluate((d) => fetch("/api/days-off", {
         method: "POST", headers: { "Content-Type": "application/json", "X-Jeongsi-Client": "1" }, body: JSON.stringify({ start: d, end: d }),
       }), iso);

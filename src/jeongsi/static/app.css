@@ -193,7 +193,7 @@ textarea.input { height: auto; min-height: 72px; padding: var(--s2) var(--s3); r
 .step-row { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; }
 .step-tools { display: grid; gap: var(--s1); justify-items: end; }
 .step-tools .row { display: flex; gap: var(--s1); }
-.editor-foot { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; padding: var(--s4); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); position: sticky; bottom: var(--s4); box-shadow: var(--shadow-sm); }
+.editor-foot { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; padding: var(--s4); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); position: sticky; bottom: var(--s4); box-shadow: var(--shadow-sm); z-index: 3; }
 .editor-foot .seg { flex: 1; min-width: 160px; }
 .seg.preview i { background: var(--line-strong); box-shadow: none; }
 
@@ -209,7 +209,7 @@ tr:last-child td { border-bottom: 0; }
 .sgrp h3 { margin: 0 0 var(--s2); font-size: 13px; font-weight: 500; color: var(--text-2); }
 .srow { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: var(--s3); align-items: start; padding: var(--s3) 0; border-bottom: 1px solid var(--line); }
 .srow:last-child { border-bottom: 0; }
-.srow input[type="checkbox"] { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
+.srow input[type="checkbox"] { width: 22px; height: 22px; margin: 2px 0 0; accent-color: var(--accent); }
 .srow label { display: grid; gap: 2px; cursor: pointer; }
 .srow .d { font-size: 12px; color: var(--muted); }
 .srow .def { font-size: 12px; color: var(--accent); font-weight: 500; white-space: nowrap; }
@@ -321,13 +321,13 @@ textarea.wz-input { height: auto; min-height: 120px; padding: var(--s3) var(--s4
 
 /* 시각 고르기 */
 .tp { display: grid; gap: var(--s4); }
-.tp-display { display: flex; align-items: center; gap: var(--s3); }
+.tp-display { display: flex; align-items: center; justify-content: center; gap: var(--s3); }
 .tp-time { font-size: 44px; font-weight: 600; letter-spacing: -.02em; min-width: 140px; text-align: center; }
 .tp-scale { display: grid; grid-template-columns: 18px 1fr 18px; gap: var(--s2); align-items: center; color: var(--muted); }
 .tp-track { position: relative; height: 40px; border-radius: 20px; background: linear-gradient(90deg, var(--sunken), var(--accent-subtle) 50%, var(--sunken)); cursor: pointer; touch-action: none; }
 .tp-tick { position: absolute; bottom: -18px; transform: translateX(-50%); font-size: 11px; color: var(--muted); }
 .tp-tick::before { content: ""; position: absolute; left: 50%; top: -12px; width: 1px; height: 6px; background: var(--line-strong); }
-.tp-pin { position: absolute; top: 50%; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%; border: 3px solid var(--surface); background: var(--accent); box-shadow: var(--shadow-sm); cursor: grab; padding: 0; }
+.tp-pin { position: absolute; top: 50%; width: 32px; height: 32px; margin: -16px 0 0 -16px; border-radius: 50%; border: 3px solid var(--surface); background: var(--accent); box-shadow: var(--shadow-sm); cursor: grab; padding: 0; }
 .tp-pin:active { cursor: grabbing; }
 
 /* 횟수 고르기 */
@@ -546,3 +546,7 @@ p.err { display: flex; align-items: center; gap: var(--s2); font-size: 13px; }
 .rc-day.start:hover:not(:disabled), .rc-day.end:hover:not(:disabled) { background: var(--accent); color: var(--surface); }
 .rc-day.start.warn { background: var(--live); }
 .wz-dates { display: grid; gap: var(--s3); }
+.tp-ticks { position: absolute; inset: 0; }
+.tp-step { flex: none; }
+.pop .tp-time { font-size: 32px; min-width: 96px; }
+.media-row .in-use { font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-subtle); border-radius: 10px; padding: 2px 8px; white-space: nowrap; }
