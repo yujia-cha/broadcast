@@ -45,7 +45,7 @@ export function weekdayPicker(selected, onChange) {
       h("div", { class: "wdp-presets" },
         presets.map(([label, days]) => {
           const active = days.length === value.length && days.every((d) => value.includes(d));
-          return h("button", { class: "chip-btn", "aria-pressed": String(active), on: { click: () => { value = [...days]; paint(); onChange(value, true); } } },
+          return h("button", { class: "chip-btn", "aria-label": label, "aria-pressed": String(active), on: { click: () => { value = [...days]; paint(); onChange(value, true); } } },
             dayDots(days), label);
         })),
     );
@@ -62,7 +62,10 @@ export const toHHMM = (m) => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
 export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}) {
   let minutes = toMinutes(value) ?? 12 * 60;
   let lo = from, hi = to;
-  const display = h("div", { class: "tp-display" });
+  const earlier = stepBtn("left", "1시간 일찍", () => set(minutes - 60), false, "−1시간");
+  const later = stepBtn("right", "1시간 늦게", () => set(minutes + 60), false, "+1시간");
+  const timeText = h("span", { class: "tp-time" });
+  const display = h("div", { class: "tp-display" }, earlier, timeText, later); // 버튼을 다시 만들지 않아 초점이 남는다
   const pin = h("button", { class: "tp-pin", role: "slider", "aria-label": "시각", "aria-valuemin": 0, "aria-valuemax": 1435 });
   const tickBox = h("span", { class: "tp-ticks", "aria-hidden": "true" });
   const track = h("div", { class: "tp-track" }, tickBox, pin);
@@ -81,11 +84,9 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
     const [nlo, nhi] = minutes < from || minutes > to ? [0, 24 * 60] : [from, to];
     if (!dragging && (nlo !== lo || nhi !== hi || !painted)) { lo = nlo; hi = nhi; painted = true; ticks(); }
     const hhmm = toHHMM(minutes);
-    display.replaceChildren(
-      stepBtn("left", "1시간 일찍", () => set(minutes - 60), minutes - 60 < 0, "−1시간"),
-      h("span", { class: "tp-time" }, hhmm),
-      stepBtn("right", "1시간 늦게", () => set(minutes + 60), minutes + 60 > 1435, "+1시간"),
-    );
+    timeText.textContent = hhmm;
+    earlier.disabled = minutes - 60 < 0;
+    later.disabled = minutes + 60 > 1435;
     pin.style.left = `${((Math.min(hi, Math.max(lo, minutes)) - lo) * 100) / (hi - lo)}%`;
     pin.setAttribute("aria-valuenow", String(minutes));
     pin.setAttribute("aria-valuetext", hhmm);
@@ -93,7 +94,9 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
   };
   const fromPointer = (e) => {
     const r = track.getBoundingClientRect();
-    set(lo + Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (hi - lo));
+    const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    if ((ratio === 0 || ratio === 1) && hi - lo < 24 * 60) { lo = 0; hi = 24 * 60; ticks(); } // 끝에 닿으면 하루 전체로
+    set(lo + ratio * (hi - lo));
   };
   track.addEventListener("pointerdown", (e) => {
     track.setPointerCapture(e.pointerId);
@@ -194,11 +197,11 @@ export function rangeCalendar({ start, end, min, allowOpen = true, marked = new 
   const labelOf = (iso) => { const d = parseDate(iso); return `${d.getMonth() + 1}/${d.getDate()} ${WEEKDAYS[(d.getDay() + 6) % 7]}`; };
   const emit = () => onChange({ start: s, end: open ? null : e });
   const pick = (iso) => {
-    if (picking === "start" || !s || iso < s) {
+    if (!s || iso < s || (picking === "start" && !allowOpen)) {
       s = iso; picking = "end";
       if (allowOpen) { open = true; e = null; } else { e = iso; }
     } else {
-      e = iso; open = false; picking = "start";
+      e = iso; open = false; picking = "end"; // 시작은 그대로, 끝만 옮긴다(시작을 바꾸려면 더 앞날을 누른다)
     }
     paint();
     emit();
@@ -274,7 +277,9 @@ export function mediaPicker({ media, selected, onPick, onPreview, upload, collap
     wrap.replaceChildren(...[
       upload,
       h("div", { class: "wz-files", role: "radiogroup", "aria-label": label }, shown.map(row)),
-      open ? null : h("button", { class: "btn sm ghost wz-more", on: { click: () => { open = true; paint(); } } }, icon("down"), `다른 파일 ${media.length - shown.length}개`),
+      !collapse || !selected || media.length <= 3 ? null
+        : open ? h("button", { class: "btn sm ghost wz-more", on: { click: () => { open = false; paint(); } } }, icon("up"), "접기")
+        : h("button", { class: "btn sm ghost wz-more", on: { click: () => { open = true; paint(); } } }, icon("down"), `다른 파일 ${media.length - shown.length}개`),
     ].filter(Boolean));
   };
   paint();

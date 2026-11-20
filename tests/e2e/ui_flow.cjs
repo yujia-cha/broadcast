@@ -44,9 +44,15 @@ async function main() {
       await chooser.setFiles(path.join(assetDir, "chime.wav"));
       await page.click('.cp-item[aria-label="1번"]');
       await page.waitForSelector(".tp-time");
-      for (let i = 0; i < 11; i++) await page.click('button[aria-label="1시간 늦게"]');
+      // −1시간 버튼을 키보드로 이어 누를 수 있어야 한다(누른 뒤에도 초점이 버튼에 남음)
+      const before = await page.textContent(".tp-time");
+      await page.focus('button[aria-label="1시간 일찍"]');
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Enter");
+      const two = Math.max(0, Number(before.slice(0, 2)) - 2);
+      if (Number((await page.textContent(".tp-time")).slice(0, 2)) !== two) throw new Error(`−1시간을 두 번 눌렀는데 ${await page.textContent(".tp-time")}`);
       await page.focus(".tp-pin");
-      for (let i = 0; i < 11; i++) await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("End");
       if ((await page.textContent(".tp-time")) !== "23:55") throw new Error(`시각이 다릅니다: ${await page.textContent(".tp-time")}`);
       await shot("02-wizard-time");
       await page.keyboard.press("Enter");
@@ -296,6 +302,27 @@ async function main() {
       await shot("10-wizard-dayoff-date");
       await page.click('button[aria-label="닫기"]');
       await page.click("dialog >> text=그만하기");
+    });
+
+    await step("5분 차이 블록은 겹치지 않고 나란히", async () => {
+      for (const [name, time] of [["겹침 가", "21:00"], ["겹침 나", "21:05"]]) {
+        await page.evaluate(([n, t]) => fetch("/api/broadcasts", {
+          method: "POST", headers: { "Content-Type": "application/json", "X-Jeongsi-Client": "1" },
+          body: JSON.stringify({ name: n, steps: [{ kind: "tts", text: "안내" }], time: t, weekdays: [0, 1, 2, 3, 4, 5, 6] }),
+        }), [name, time]);
+      }
+      await page.click(".nav >> text=방송 구성");
+      await page.click(".nav >> text=시간표");
+      const a = page.locator('.cal-col.today .cblock[aria-label*="겹침 가"]');
+      const b = page.locator('.cal-col.today .cblock[aria-label*="겹침 나"]');
+      await a.scrollIntoViewIfNeeded();
+      const [ra, rb] = [await a.boundingBox(), await b.boundingBox()];
+      const overlap = ra.x < rb.x + rb.width && rb.x < ra.x + ra.width && ra.y < rb.y + rb.height && rb.y < ra.y + ra.height;
+      if (overlap) throw new Error("가까운 블록이 서로 덮습니다");
+      await shot("11-close-blocks");
+      await a.click();
+      await page.waitForSelector(".pop >> text=겹침 가");
+      await page.keyboard.press("Escape");
     });
 
     if (errors.length) throw new Error(`콘솔 오류: ${errors.join(" | ")}`);

@@ -253,7 +253,11 @@ function fileField(d) {
 }
 
 function timeField(d) {
-  if (!d.time) d.time = "12:00";
+  if (!d.time) {
+    // 기본값: 지금 이후 가장 가까운 정각(오늘 고르면 바로 '지남'이 되지 않게)
+    const hour = Math.min(23, Number(ctx.status.now.slice(11, 13)) + 1);
+    d.time = `${String(hour).padStart(2, "0")}:00`;
+  }
   return timePicker(d.time, (v, done) => { d.time = v; refreshPrimary(); if (done) next(); });
 }
 

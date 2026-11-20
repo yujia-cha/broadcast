@@ -141,15 +141,8 @@ function renderGrid() {
   const columns = w.days.map((day, di) => {
     const col = h("div", { class: `cal-col${day.is_today ? " today" : ""}${day.day_off ? " off" : ""}`, style: { height: `${height}px` } });
     for (let i = 0; i <= (to - from) / 60; i++) col.append(h("i", { class: "cal-line", style: { top: `${i * HOUR_PX}px` } }));
-    const groups = new Map();
-    for (const row of w.rows) {
-      const cell = row.cells[di];
-      if (cell.status === "none") continue;
-      groups.set(cell.time, [...(groups.get(cell.time) || []), { row, cell }]);
-    }
-    for (const items of groups.values()) {
-      items.forEach((item, i) => col.append(block(item.row, item.cell, from, i, items.length)));
-    }
+    const items = w.rows.map((row) => ({ row, cell: row.cells[di] })).filter((x) => x.cell.status !== "none");
+    for (const { item, lane, lanes } of layoutLanes(items)) col.append(block(item.row, item.cell, from, lane, lanes));
     if (day.is_today && nowMinutes() >= from && nowMinutes() <= to) {
       col.append(h("i", { class: "cal-now", style: { top: `${((nowMinutes() - from) / 60) * HOUR_PX}px` } }));
     }
@@ -164,6 +157,34 @@ function renderGrid() {
     if (window.innerWidth > 1100)
     (mainEl.querySelector(".cblock.next, .cblock.live") || mainEl.querySelector(".cal-now"))?.scrollIntoView({ block: "nearest" });
   }
+}
+
+// 세로로 겹치는 블록(시각 차이가 블록 높이보다 작음)은 한 무리로 묶어 나란히 놓는다
+function layoutLanes(items) {
+  const minGap = (blockPx() / st.hourPx) * 60; // 블록 높이를 분으로
+  const sorted = [...items].sort((a, b) => toMinutes(a.cell.time) - toMinutes(b.cell.time));
+  const out = [];
+  let cluster = [], clusterEnd = -Infinity;
+  const flush = () => {
+    const laneEnds = [];
+    const placed = cluster.map((item) => {
+      const start = toMinutes(item.cell.time);
+      let lane = laneEnds.findIndex((end) => end <= start);
+      if (lane < 0) lane = laneEnds.length;
+      laneEnds[lane] = start + minGap;
+      return { item, lane };
+    });
+    placed.forEach((p) => out.push({ ...p, lanes: laneEnds.length }));
+    cluster = [];
+  };
+  for (const item of sorted) {
+    const start = toMinutes(item.cell.time);
+    if (cluster.length && start >= clusterEnd) flush();
+    cluster.push(item);
+    clusterEnd = cluster.length === 1 ? start + minGap : Math.max(clusterEnd, start + minGap);
+  }
+  if (cluster.length) flush();
+  return out;
 }
 
 function block(row, cell, from, index, count) {
@@ -273,7 +294,7 @@ function timeEditor(anchor, row, cell) {
   popover(anchor,
     h("div", { class: "pop-in" },
       h("div", { class: "pop-head" }, h("span", null, row.slot.name), h("small", null, fmtDate(cell.date))),
-      timePicker(value, (v) => (value = v)),
+      timePicker(value, (v, done) => { value = v; if (done) moveTime(row, cell, value); }),
       h("div", { class: "ia-row" }, h("button", { class: "btn pri", on: { click: () => moveTime(row, cell, value) } }, icon("check"), "적용")),
     ));
 }
@@ -461,8 +482,23 @@ export function openSlotDialog(slot) {
       ? h("div", { class: "wz-stack" },
           weekdayPicker(draft.weekdays, (v) => (draft.weekdays = v)),
           periodField())
-      : multiDateCalendar({ dates: draft.dates, min: todayIso() }, (v) => (draft.dates = v)));
+      : datesWithStates());
   };
+  function datesWithStates() {
+    let seq = 0;
+    const cal = multiDateCalendar({ dates: draft.dates, min: todayIso() }, (v) => { draft.dates = v; check(); });
+    const check = async () => {
+      const mine = ++seq;
+      if (!draft.dates.length) return cal.setStates({});
+      try {
+        const res = await post("/api/broadcasts/check", { time: draft.time, dates: draft.dates });
+        if (mine === seq) cal.setStates(Object.fromEntries(res.dates.map((x) => [x.date, x.state])));
+      } catch { /* 저장할 때 다시 확인한다 */ }
+    };
+    check();
+    return cal;
+  }
+
   // 기간: 평소에는 한 줄 요약, 누르면 달력(끝 없음 ∞). 달력을 고르는 동안에는 요약만 바꾼다
   function periodField() {
     const today = todayIso();
@@ -476,11 +512,11 @@ export function openSlotDialog(slot) {
     return h("div", { class: "period" },
       h("button", { type: "button", class: "chip-btn", "aria-expanded": String(periodOpen), on: { click: () => { periodOpen = !periodOpen; paintWhen(); } } },
         icon("calendar"), text, icon(periodOpen ? "up" : "down")),
-      draft.start_date || draft.end_date ? h("button", { type: "button", class: "link", on: { click: () => { draft.start_date = null; draft.end_date = null; paintWhen(); } } }, "기간 없애기") : null,
       periodOpen ? rangeCalendar({
         start: draft.start_date || today, end: draft.end_date,
         min: draft.start_date && draft.start_date < today ? draft.start_date : today, allowOpen: true,
       }, (v) => { draft.start_date = v.start; draft.end_date = v.end; paintSummary(); }) : null,
+      h("button", { type: "button", class: "link", on: { click: () => { draft.start_date = null; draft.end_date = null; paintWhen(); } } }, "기간 없애기"),
     );
   }
 
@@ -493,7 +529,7 @@ export function openSlotDialog(slot) {
       h("label", { class: "field" }, h("span", null, "방송 구성"),
         (progEl = h("select", { class: "input" }, ctx.programs.map((p) => h("option", { value: p.id, selected: p.id === draft.program_id }, p.name))))),
       h("label", { style: { display: "flex", gap: "var(--s2)", alignItems: "center" } },
-        (enabledEl = h("input", { type: "checkbox", checked: draft.enabled, style: { width: "18px", height: "18px", accentColor: "var(--accent)" } })), "사용"),
+        (enabledEl = h("input", { type: "checkbox", checked: draft.enabled, style: { width: "22px", height: "22px", accentColor: "var(--accent)" } })), "사용"),
       (errEl = h("p", { class: "err", role: "alert" })),
       (confirmBox = h("div", { hidden: true })),
       h("div", { class: "dlg-foot" },

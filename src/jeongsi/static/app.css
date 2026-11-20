@@ -559,3 +559,6 @@ p.err { display: flex; align-items: center; gap: var(--s2); font-size: 13px; }
   .rail .card > .ruler-box { flex: 1 1 200px; }
   .rail .card > .ia-row { margin-left: auto; }
 }
+/* 대화상자: 내용이 길어도 저장·취소 줄은 아래에 붙어 있게 */
+dialog { max-height: calc(100vh - 32px); overflow: auto; }
+dialog .dlg-foot { position: sticky; bottom: 0; background: var(--surface); padding-block: var(--s3); margin-bottom: calc(-1 * var(--s3)); z-index: 2; }
