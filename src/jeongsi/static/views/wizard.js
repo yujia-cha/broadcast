@@ -96,7 +96,7 @@ function toBody(d) {
   return {
     name: d.name.trim(), steps, time: d.time,
     weekdays: d.mode === "dates" ? [] : d.weekdays,
-    dates: d.mode === "dates" ? d.dates : [],
+    dates: d.mode === "dates" ? d.dates.filter((x) => d.dateStates[x] !== "past") : [], // 이미 지난 날은 남기지 않는다
     // 매주 방송은 오늘부터. 오늘 시각이 이미 지났으면 내일부터(지난 블록이 이미 나간 것처럼 보이지 않게)
     start_date: d.mode === "dates" ? null : d.time > ctx.status.now.slice(11, 16) ? today() : tomorrow(),
   };
