@@ -60,9 +60,11 @@ def run_headless(args: argparse.Namespace, data_dir: Path) -> int:
 
     application = build_application(data_dir, args.port, NullShell(), use_fake_audio=args.dev)
     application.start()
-    print(f"정시 방송: http://127.0.0.1:{args.port}  (데이터: {data_dir})", flush=True)
+    log.info("정시 방송: http://127.0.0.1:%s  (데이터: %s)", args.port, data_dir)
+    if sys.stdout is not None:  # 창 없는 exe에서는 표준 출력이 없다
+        print(f"정시 방송: http://127.0.0.1:{args.port}  (데이터: {data_dir})", flush=True)
     try:
-        uvicorn.run(create_app(application.services), host="127.0.0.1", port=args.port, log_level="warning")
+        uvicorn.run(create_app(application.services), host="127.0.0.1", port=args.port, log_level="warning", log_config=None)
     finally:
         application.stop()
     return 0

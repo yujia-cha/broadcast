@@ -77,7 +77,13 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-`Release` 워크플로가 Windows에서 테스트한 뒤 `JeongsiBroadcast.exe`와 `JeongsiBroadcast.exe.sha256`을 만들어 릴리즈에 올립니다. 설치된 앱은 이 두 파일로 업데이트합니다. 태그는 `v숫자.숫자.숫자` 형식이어야 합니다.
+`Release` 워크플로가 다음 순서로 진행하고, 하나라도 실패하면 릴리즈를 만들지 않습니다.
+
+1. 테스트(Linux·Windows, 화면 E2E)
+2. Windows에서 exe 빌드 후 배포 스모크 테스트(`tools/smoke_exe.py`): 개발·실제 모드 실행, Windows 오디오로 방송, 자동 실행 등록·해제, 로컬 가짜 릴리즈로 업데이트 교체·재시작
+3. `JeongsiBroadcast.exe`와 `JeongsiBroadcast.exe.sha256`을 릴리즈에 올림
+
+브랜치에 푸시할 때마다 CI가 1·2단계를 돌리고, 빌드한 exe를 Actions 아티팩트(`JeongsiBroadcast-windows`)로 14일간 보관합니다. 릴리즈 전에 받아서 직접 시험할 수 있습니다. 설치된 앱은 이 두 파일로 업데이트합니다. 태그는 `v숫자.숫자.숫자` 형식이어야 합니다.
 
 **되돌리기**
 

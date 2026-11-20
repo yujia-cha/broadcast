@@ -18,7 +18,7 @@ from .media import MediaLibrary
 from .runner import Job, Runner
 from .scheduler import Scheduler
 from .storage import ConfigStore
-from .updater import UpdateError, Updater
+from .updater import FEED_ENV, UpdateError, Updater
 
 log = logging.getLogger(__name__)
 UPDATE_INTERVAL_SECONDS = 24 * 60 * 60
@@ -73,7 +73,7 @@ def build_application(data_dir: Path, port: int, shell: Shell, use_fake_audio: b
     history = History(data_dir / "history.jsonl")
     media = MediaLibrary(data_dir / "media", audio.player.duration)
     runner = Runner(audio, lambda: store.config.settings, history, media.directory, data_dir / "work")
-    updater = Updater(__version__)
+    updater = Updater(__version__, feed_url=os.environ.get(FEED_ENV) or None)
     services = Services(
         store=store,
         history=history,

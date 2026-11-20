@@ -173,3 +173,42 @@ def test_mark_error_sets_state_and_message():
     updater = Updater("1.0.0", opener=opener({}))
     updater.mark_error("쓸 수 없음")
     assert updater.status() == {"state": "error", "message": "쓸 수 없음", "current": "1.0.0"}
+
+
+def test_local_feed_is_used_and_allows_local_downloads():
+    feed = "http://127.0.0.1:9999/latest.json"
+    data = json.loads(release_json())
+    for asset in data["assets"]:
+        asset["browser_download_url"] = "http://127.0.0.1:9999/" + asset["name"]
+    updater = Updater("1.0.0", opener=opener({feed: json.dumps(data).encode()}), feed_url=feed)
+    assert updater.check().asset_url == "http://127.0.0.1:9999/" + ASSET_NAME
+
+
+def test_feed_override_rejects_remote_hosts():
+    with pytest.raises(ValueError):
+        Updater("1.0.0", feed_url="https://evil.example/latest.json")
+
+
+def test_apply_update_passes_extra_args(tmp_path):
+    exe = tmp_path / ASSET_NAME
+    exe.write_bytes(b"old")
+    new = tmp_path / "new.exe"
+    new.write_bytes(b"new")
+    launched = []
+    apply_update(new, exe, launch=launched.append, extra_args=["--port", "5000"])
+    assert launched == [[str(exe), "--port", "5000", "--updated"]]
+
+
+def test_cleanup_old_exe_gives_up_quietly(tmp_path, monkeypatch):
+    exe = tmp_path / ASSET_NAME
+    old = old_exe_path(exe)
+    old.write_bytes(b"old")
+    calls = []
+
+    def locked(self, missing_ok=False):
+        calls.append(1)
+        raise PermissionError("잠김")
+
+    monkeypatch.setattr(type(old), "unlink", locked)
+    cleanup_old_exe(exe, attempts=3, delay=0)
+    assert len(calls) == 3

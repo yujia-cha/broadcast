@@ -137,7 +137,8 @@ def run_desktop(args, data_dir: Path) -> int:
     application = build_application(data_dir, args.port, shell)
     shell.application = application
     if shell.exe_path():
-        cleanup_old_exe(shell.exe_path())
+        exe = shell.exe_path()
+        threading.Thread(target=cleanup_old_exe, args=(exe,), name="cleanup-old", daemon=True).start()
     settings = application.services.store.config.settings
     try:
         autostart.set_enabled(settings.autostart)  # exe를 옮겼어도 경로를 맞춘다

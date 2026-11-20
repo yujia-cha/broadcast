@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -475,7 +476,9 @@ def create_app(services: Services) -> FastAPI:
             try:
                 # exe와 같은 폴더에 받아야 같은 드라이브 안에서 바로 바꿀 수 있고, 쓰기 권한도 미리 확인된다
                 new_file = s.updater.download(release, exe.parent)
-                apply_update(new_file, exe)
+                # 포트·데이터 폴더 같은 실행 인자는 새 버전에도 그대로 넘긴다
+                keep = [a for a in sys.argv[1:] if a not in ("--autostart", "--updated")]
+                apply_update(new_file, exe, extra_args=keep)
                 s.shell.request_exit()
             except UpdateError as exc:
                 log.error("업데이트 실패: %s", exc)

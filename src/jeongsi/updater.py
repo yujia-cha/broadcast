@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -24,6 +25,9 @@ from . import APP_ID, GITHUB_REPO
 log = logging.getLogger(__name__)
 
 ASSET_NAME = f"{APP_ID}.exe"
+# 배포 테스트 전용: 로컬 가짜 릴리즈 주소(http://127.0.0.1:...만 허용). 사용자 PC에서는 쓰지 않는다.
+FEED_ENV = "JEONGSI_UPDATE_FEED"
+LOCAL_FEED_PREFIX = "http://127.0.0.1:"
 CHECKSUM_SUFFIX = ".sha256"
 USER_AGENT = f"{APP_ID}-updater"
 CHUNK = 64 * 1024
@@ -76,9 +80,14 @@ class Updater:
         repo: str = GITHUB_REPO,
         opener: Callable[[str], object] = _open,
         on_change: Callable[[], None] | None = None,
+        feed_url: str | None = None,
     ):
+        if feed_url is not None and not feed_url.startswith(LOCAL_FEED_PREFIX):
+            raise ValueError("테스트용 업데이트 주소는 http://127.0.0.1만 허용합니다.")
         self.current_version = current_version
         self._repo = repo
+        self._feed_url = feed_url or f"https://api.github.com/repos/{repo}/releases/latest"
+        self._download_prefix = LOCAL_FEED_PREFIX if feed_url else "https://github.com/"
         self._open = opener
         self._on_change = on_change or (lambda: None)
         self._lock = threading.Lock()
@@ -107,7 +116,7 @@ class Updater:
         """최신 정식 릴리즈가 현재보다 새 버전이면 돌려준다. 네트워크 오류는 UpdateError."""
         self._set(state="checking")
         try:
-            with self._open(f"https://api.github.com/repos/{self._repo}/releases/latest") as resp:
+            with self._open(self._feed_url) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:  # 아직 릴리즈가 없음
@@ -137,7 +146,7 @@ class Updater:
             log.warning("릴리즈 %s에 %s 또는 체크섬 파일이 없습니다", tag, ASSET_NAME)
             return None
         for url in (asset_url, checksum_url):
-            if not url.startswith("https://github.com/"):
+            if not url.startswith(self._download_prefix):
                 log.warning("허용하지 않는 다운로드 주소: %s", url)
                 return None
         return ReleaseInfo(
@@ -201,9 +210,27 @@ def old_exe_path(exe_path: Path) -> Path:
     return exe_path.with_name(exe_path.stem + ".old" + exe_path.suffix)
 
 
-def apply_update(new_file: Path, exe_path: Path, launch: Callable[[list[str]], None] | None = None) -> None:
+def _launch_detached(args: list[str]) -> None:
+    """이전 앱이 끝나도 새 앱이 같이 끝나지 않도록 분리해서 실행한다."""
+    flags = 0
+    if sys.platform == "win32":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            subprocess.Popen(args, close_fds=True, creationflags=flags | 0x01000000)  # CREATE_BREAKAWAY_FROM_JOB  # noqa: S603
+            return
+        except OSError:
+            log.info("작업 그룹에서 분리할 수 없어 일반 방식으로 실행합니다")
+    subprocess.Popen(args, close_fds=True, creationflags=flags)  # noqa: S603
+
+
+def apply_update(
+    new_file: Path,
+    exe_path: Path,
+    launch: Callable[[list[str]], None] | None = None,
+    extra_args: list[str] | None = None,
+) -> None:
     """exe를 교체하고 새 exe를 실행한다. 교체에 실패하면 원래 exe를 되돌린다."""
-    launch = launch or (lambda args: subprocess.Popen(args, close_fds=True))  # noqa: S603
+    launch = launch or _launch_detached
     old = old_exe_path(exe_path)
     try:
         old.unlink(missing_ok=True)
@@ -217,11 +244,18 @@ def apply_update(new_file: Path, exe_path: Path, launch: Callable[[list[str]], N
     except OSError as exc:
         os.replace(old, exe_path)
         raise UpdateError(f"새 버전으로 바꾸지 못했습니다: {exc}") from exc
-    launch([str(exe_path), "--updated"])
+    launch([str(exe_path), *(extra_args or []), "--updated"])
 
 
-def cleanup_old_exe(exe_path: Path) -> None:
-    try:
-        old_exe_path(exe_path).unlink(missing_ok=True)
-    except OSError:
-        log.info("이전 버전 파일을 아직 지울 수 없습니다")
+def cleanup_old_exe(exe_path: Path, attempts: int = 20, delay: float = 0.5) -> None:
+    """이전 버전 exe를 지운다. 이전 앱이 막 끝나는 중이면 잠시 잠겨 있을 수 있어 몇 번 다시 시도한다."""
+    import time
+
+    old = old_exe_path(exe_path)
+    for _ in range(attempts):
+        try:
+            old.unlink(missing_ok=True)
+            return
+        except OSError:
+            time.sleep(delay)
+    log.info("이전 버전 파일을 아직 지울 수 없습니다. 다음 실행 때 다시 지웁니다")
