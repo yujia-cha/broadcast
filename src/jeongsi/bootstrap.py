@@ -82,7 +82,7 @@ def build_application(data_dir: Path, port: int, shell: Shell, use_fake_audio: b
         shell=shell,
         allowed_hosts={f"127.0.0.1:{port}", f"localhost:{port}"},
     )
-    scheduler = Scheduler(store, runner.enqueue)
+    scheduler = Scheduler(store, runner.enqueue, state_path=data_dir / "work" / "scheduler.json")
     return Application(services=services, scheduler=scheduler, _update_stop=threading.Event())
 
 

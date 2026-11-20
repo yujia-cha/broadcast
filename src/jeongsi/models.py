@@ -33,9 +33,14 @@ def _check_hhmm(value: str) -> str:
     return value
 
 
+_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
 def is_safe_media_name(name: str) -> bool:
-    """media 폴더 안의 파일 이름만 허용한다(경로 조작 방지)."""
-    return bool(name) and "/" not in name and "\\" not in name and not name.startswith(".") and ".." not in name
+    """media 폴더 안의 파일 이름만 허용한다(경로 조작·다른 드라이브·장치 이름 방지)."""
+    if not name or name.startswith(".") or ".." in name or any(c in name for c in '/\\:'):
+        return False
+    return name.split(".")[0].upper() not in _RESERVED
 
 
 class _Model(BaseModel):

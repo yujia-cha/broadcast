@@ -103,6 +103,9 @@ class Updater:
         snap["current"] = self.current_version
         return snap
 
+    def mark_downloading(self) -> None:
+        self._set(state="downloading", progress=0)
+
     def mark_error(self, message: str) -> None:
         self._set(state="error", message=message)
 
@@ -242,9 +245,25 @@ def apply_update(
     try:
         os.replace(new_file, exe_path)
     except OSError as exc:
-        os.replace(old, exe_path)
+        _rollback(old, exe_path)
         raise UpdateError(f"새 버전으로 바꾸지 못했습니다: {exc}") from exc
-    launch([str(exe_path), *(extra_args or []), "--updated"])
+    try:
+        launch([str(exe_path), *(extra_args or []), "--updated"])
+    except OSError as exc:  # 예: 백신이 새 파일을 막음
+        failed = exe_path.with_name(exe_path.stem + ".failed" + exe_path.suffix)
+        try:
+            os.replace(exe_path, failed)
+        except OSError:
+            log.exception("실행하지 못한 새 버전을 옮기지 못했습니다")
+        _rollback(old, exe_path)
+        raise UpdateError(f"새 버전을 실행하지 못해 이전 버전으로 되돌렸습니다: {exc}") from exc
+
+
+def _rollback(old: Path, exe_path: Path) -> None:
+    try:
+        os.replace(old, exe_path)
+    except OSError:
+        log.exception("이전 버전으로 되돌리지 못했습니다. %s 이름을 %s로 바꾸면 복구됩니다", old.name, exe_path.name)
 
 
 def cleanup_old_exe(exe_path: Path, attempts: int = 20, delay: float = 0.5) -> None:

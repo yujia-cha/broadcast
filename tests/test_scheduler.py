@@ -77,3 +77,50 @@ def test_skipped_slot_is_not_fired(tmp_path):
     sched, _, _, jobs = make(tmp_path, datetime(2026, 11, 20, 12, 0, 0), overrides=overrides)
     sched.tick()
     assert jobs == []
+
+
+def test_restart_within_grace_does_not_fire_again(tmp_path):
+    # Arrange: 12:00 방송을 내보낸 뒤 12:00:40에 앱이 다시 시작된 상황
+    state = tmp_path / "scheduler.json"
+    store = ConfigStore(tmp_path / "config.json")
+    store.replace(make_config())
+    first = []
+    Scheduler(store, first.append, now=Clock(datetime(2026, 11, 20, 12, 0, 5)), state_path=state).tick()
+    # Act
+    second = []
+    Scheduler(store, second.append, now=Clock(datetime(2026, 11, 20, 12, 0, 40)), state_path=state).tick()
+    # Assert
+    assert [j.slot_id for j in first] == ["lunch"] and second == []
+
+
+def test_state_file_keeps_only_recent_keys(tmp_path):
+    state = tmp_path / "scheduler.json"
+    sched, _, clock, _ = make(tmp_path, datetime(2026, 11, 20, 12, 0, 0))
+    sched._state_path = state
+    sched.tick()
+    clock.at = datetime(2026, 11, 20, 13, 0, 0)
+    sched.tick()
+    import json
+    assert json.loads(state.read_text(encoding="utf-8")) == {}
+
+
+def test_corrupt_state_file_is_ignored(tmp_path):
+    state = tmp_path / "scheduler.json"
+    state.write_text("{깨짐", encoding="utf-8")
+    store = ConfigStore(tmp_path / "config.json")
+    store.replace(make_config())
+    jobs = []
+    Scheduler(store, jobs.append, now=Clock(datetime(2026, 11, 20, 12, 0, 0)), state_path=state).tick()
+    assert len(jobs) == 1
+
+
+def test_queued_job_check_sees_later_skip_and_auto_off(tmp_path):
+    sched, store, _, jobs = make(tmp_path, datetime(2026, 11, 20, 12, 0, 0))
+    sched.tick()
+    check = jobs[0].check
+    assert check() is True
+    store.update(lambda c: c.overrides.append(Override(date=FRI, slot_id="lunch", action="skip")))
+    assert check() is False
+    store.update(lambda c: setattr(c, "overrides", []))
+    store.update(lambda c: setattr(c.settings, "auto_broadcast", False))
+    assert check() is False

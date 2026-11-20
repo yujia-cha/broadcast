@@ -16,6 +16,7 @@ import contextlib
 import logging
 import os
 import threading
+import time
 import wave
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -82,18 +83,30 @@ class WindowsMediaSessions:
         for session in await self._sessions():
             try:
                 if session.get_playback_info().playback_status == Status.PLAYING:
+                    key = await self._session_key(session)
                     if await session.try_pause_async():
-                        paused.append(session.source_app_user_model_id)
+                        paused.append(key)
             except Exception:
                 log.exception("미디어 세션 일시정지 실패")
         return paused
+
+    @staticmethod
+    async def _session_key(session) -> str:
+        """같은 브라우저의 여러 탭을 구분하려고 앱 id와 제목을 함께 쓴다."""
+        title = ""
+        with contextlib.suppress(Exception):
+            props = await session.try_get_media_properties_async()
+            title = props.title or ""
+        return f"{session.source_app_user_model_id}|{title}"
 
     async def _resume(self, ids: set[str]) -> None:
         from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status
 
         for session in await self._sessions():
             try:
-                if session.source_app_user_model_id in ids and session.get_playback_info().playback_status == Status.PAUSED:
+                if session.get_playback_info().playback_status != Status.PAUSED:
+                    continue
+                if await self._session_key(session) in ids:
                     await session.try_play_async()
             except Exception:
                 log.exception("미디어 세션 다시 재생 실패")
@@ -129,10 +142,11 @@ class WindowsAppMuter:
             if session.ProcessId == self._own_pid:
                 continue
             try:
+                key = self._key(session)  # 키를 못 얻으면 음소거하지 않는다(복원할 수 없으므로)
                 volume = session.SimpleAudioVolume
                 if not volume.GetMute():
                     volume.SetMute(1, None)
-                    newly.append(self._key(session))
+                    newly.append(key)
             except Exception:
                 log.exception("앱 음소거 실패")
         return newly
@@ -277,6 +291,8 @@ class MiniaudioPlayer:
         import miniaudio
 
         finished = threading.Event()
+        # 장치가 사라져 끝 신호가 오지 않아도 멈추지 않도록 길이 + 여유를 상한으로 둔다
+        deadline = time.monotonic() + (self.duration(path) or 7200) + 5
         stream = miniaudio.stream_file(str(path))
         wrapped = miniaudio.stream_with_callbacks(stream, end_callback=finished.set)
         next(wrapped)
@@ -284,6 +300,9 @@ class MiniaudioPlayer:
             device.start(wrapped)
             while not finished.wait(0.05):
                 if interrupt.is_set():
+                    break
+                if time.monotonic() > deadline:
+                    log.warning("재생이 끝나지 않아 멈춥니다(장치 문제 가능): %s", path.name)
                     break
             else:
                 interrupt.wait(0.15)  # 장치 버퍼에 남은 끝부분까지 재생

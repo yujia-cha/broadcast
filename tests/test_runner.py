@@ -228,3 +228,62 @@ def test_ducking_failures_do_not_stop_broadcast(tmp_path):
     assert runner.last_result["result"] == "done"
     assert backend.media.calls == [("pause",), ("resume", ["chrome"])]
     assert len(backend.player.played) == 3
+
+
+def test_shutdown_drops_queued_jobs_without_ducking(tmp_path):
+    # Arrange: 방송 하나가 재생 중이고 하나가 대기 중일 때 종료
+    backend = fake_backend()
+    backend.player = FakePlayer(block=True)
+    runner, backend, _ = make_runner(tmp_path, backend)
+    runner.start()
+    runner.enqueue(job())
+    assert backend.player.started.wait(2)
+    runner.enqueue(job())
+    # Act
+    runner.shutdown()
+    # Assert: 대기 중이던 방송은 시작조차 하지 않고 소리는 복원됨
+    assert backend.media.calls.count(("pause",)) == 1
+    assert backend.media.calls[-1] == ("resume", ["chrome"])
+
+
+def test_job_whose_check_fails_is_skipped(tmp_path):
+    runner, backend, _ = make_runner(tmp_path)
+    runner.start()
+    try:
+        skipped = job()
+        skipped.check = lambda: False
+        runner.enqueue(skipped)
+        runner.enqueue(job(kind="manual"))
+        assert wait_until(lambda: runner.last_result and runner.last_result["kind"] == "manual")
+        assert backend.media.calls.count(("pause",)) == 1
+    finally:
+        runner.shutdown()
+
+
+def test_broadcast_interrupts_preview(tmp_path):
+    backend = fake_backend()
+    backend.player = FakePlayer(block=True)
+    runner, backend, _ = make_runner(tmp_path, backend)
+    runner.start()
+    try:
+        runner.enqueue(job(kind="preview"))
+        assert wait_until(lambda: runner.status().get("kind") == "preview" and runner.status()["state"] == "playing")
+        runner.enqueue(job())
+        assert wait_until(lambda: runner.status().get("kind") == "scheduled")
+    finally:
+        runner.shutdown()
+
+
+def test_stop_with_kind_only_stops_matching(tmp_path):
+    backend = fake_backend()
+    backend.player = FakePlayer(block=True)
+    runner, backend, _ = make_runner(tmp_path, backend)
+    runner.start()
+    try:
+        runner.enqueue(job())
+        assert backend.player.started.wait(2)
+        assert runner.stop_current(kind="preview") is False
+        assert runner.on_air
+        assert runner.stop_current(kind="scheduled") is True
+    finally:
+        runner.shutdown()

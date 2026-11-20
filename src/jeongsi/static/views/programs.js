@@ -289,7 +289,7 @@ async function previewAll() {
 
 async function stopPreview() {
   try {
-    await post("/api/broadcast/stop");
+    await post("/api/broadcast/stop", { kind: "preview" });
   } catch (err) {
     toastError(err);
   }

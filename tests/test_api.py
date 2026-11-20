@@ -269,3 +269,35 @@ def test_failure_is_reported_in_status_not_stored(env, tmp_path):
         time.sleep(0.02)
     assert last["result"] == "failed" and "소리 파일이 없습니다" in last["error"]
     assert not list(tmp_path.rglob("*history*"))
+
+
+def test_import_rejects_newer_schema(env):
+    client, services, _ = env
+    data = make_config().model_dump(mode="json")
+    data["schema_version"] = 99
+    res = client.post("/api/import", json=data, headers=HEADERS)
+    assert res.status_code == 422 and "새 버전" in res.json()["error"]
+
+
+def test_reset_settings_keeps_auto_broadcast(env):
+    client, services, _ = env
+    client.patch("/api/settings", json={"auto_broadcast": False, "volume": 30}, headers=HEADERS)
+    client.post("/api/settings/reset", headers=HEADERS)
+    settings = services.store.config.settings
+    assert settings.auto_broadcast is False and settings.volume == 70
+
+
+def test_stop_preview_does_not_stop_broadcast(env):
+    client, _, backend = env
+    client.post("/api/broadcast", json={"program_id": "p1"}, headers=HEADERS)
+    assert backend.player.started.wait(2)
+    assert client.post("/api/broadcast/stop", json={"kind": "preview"}, headers=HEADERS).json()["stopped"] is False
+    assert client.post("/api/broadcast/stop", headers=HEADERS).json()["stopped"] is True
+
+
+def test_update_apply_twice_is_refused(env):
+    client, services, _ = env
+    services.updater._release = __import__("jeongsi.updater", fromlist=["ReleaseInfo"]).ReleaseInfo("9.0.0", "", "", "", "a", "b")
+    services.updater.mark_downloading()
+    res = client.post("/api/update/apply", headers=HEADERS)
+    assert res.status_code == 409 and "진행" in res.json()["error"]

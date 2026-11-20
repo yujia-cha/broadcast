@@ -40,6 +40,8 @@ class Job:
     program: Program
     slot_id: str | None = None
     date: date | None = None
+    # 재생 직전에 아직 유효한지 확인(예약 방송: 쉬기·자동 방송 끄기가 그새 적용됐는지)
+    check: Callable[[], bool] | None = field(default=None, compare=False, repr=False)
 
     @property
     def ducks(self) -> bool:
@@ -111,6 +113,7 @@ class Runner:
         self._thread: threading.Thread | None = None
         self._status: dict = {"state": "idle"}
         self._restore_path = work_dir / "restore.json"
+        self._closing = False
 
     # 공개 API --------------------------------------------------------------
     def start(self) -> None:
@@ -121,14 +124,25 @@ class Runner:
         self._thread.start()
 
     def shutdown(self, timeout: float = 10.0) -> None:
+        """대기 중인 방송은 버리고 지금 방송을 끈 뒤 소리 상태를 복원하고 끝낸다."""
+        self._closing = True
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
         self.stop_current()
         self._queue.put(None)
         if self._thread:
             self._thread.join(timeout)
 
     def enqueue(self, job: Job) -> None:
+        if self._closing:
+            return
         if job.kind == "preview" and self.busy:
             raise RunnerBusy("방송 중에는 미리듣기를 할 수 없습니다.")
+        if job.kind != "preview":
+            self.stop_current(kind="preview")  # 방송이 미리듣기보다 우선
         self._queue.put(job)
 
     @property
@@ -141,10 +155,12 @@ class Runner:
         with self._lock:
             return self._status["state"] != "idle" and self._status.get("kind") != "preview"
 
-    def stop_current(self) -> bool:
-        """지금 방송(또는 미리듣기)을 끈다. 끌 것이 없으면 False."""
+    def stop_current(self, kind: str | None = None) -> bool:
+        """지금 방송(또는 미리듣기)을 끈다. kind를 주면 그 종류일 때만 끈다. 끌 것이 없으면 False."""
         with self._lock:
             if self._status["state"] == "idle":
+                return False
+            if kind is not None and self._status.get("kind") != kind:
                 return False
             self._stop_requested = True
         self._interrupt.set()
@@ -198,7 +214,12 @@ class Runner:
             job = self._queue.get()
             if job is None:
                 return
+            if self._closing:
+                continue
             try:
+                if job.check is not None and not job.check():
+                    log.info("대기 중에 취소된 방송을 건너뜁니다: %s", job.name)
+                    continue
                 self._execute(job)
             except Exception:  # 실행기 스레드는 죽지 않는다
                 log.exception("방송 실행 중 예상치 못한 오류")

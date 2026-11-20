@@ -54,6 +54,8 @@ class MediaLibrary:
 
     def save(self, original_name: str, stream: BinaryIO) -> str:
         filename = safe_filename(original_name)
+        if not is_safe_media_name(filename):
+            filename = "sound" + Path(filename).suffix
         if Path(filename).suffix.lower() not in ALLOWED_EXTENSIONS:
             raise MediaError("mp3, wav, flac, ogg 파일만 올릴 수 있습니다.")
         stored = f"{uuid.uuid4().hex[:8]}-{filename}"

@@ -141,8 +141,8 @@ function openUpdateDialog() {
   if (!upd?.release) return;
   const rel = upd.release;
   const published = rel.published_at ? new Date(rel.published_at).toLocaleDateString("ko-KR") : "";
-  let bar, msg, applyBtn;
-  const { close } = openDialog("새 버전", (close) =>
+  let bar, msg, applyBtn, timer;
+  const { close, done } = openDialog("새 버전", (close) =>
     h("div", { class: "dlg" },
       h("h2", null, `새 버전 v${rel.version}`),
       h("span", { class: "meta" }, `현재 v${upd.current}${published ? ` · ${published} 배포` : ""}`),
@@ -176,7 +176,8 @@ function openUpdateDialog() {
       applyBtn.textContent = "다시 시도";
       return;
     }
-    const timer = setInterval(() => {
+    clearInterval(timer);
+    timer = setInterval(() => {
       const u = ctx.status?.update;
       if (!u) return;
       if (u.progress != null) bar.style.width = `${Math.round(u.progress * 100)}%`;
@@ -192,6 +193,7 @@ function openUpdateDialog() {
       }
     }, 300);
   }
+  done.then(() => clearInterval(timer));
   return close;
 }
 

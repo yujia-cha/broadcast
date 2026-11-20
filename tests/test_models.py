@@ -94,3 +94,10 @@ def test_program_summary_uses_labels_and_repeat():
 def test_media_display_name_strips_storage_prefix():
     assert media_display_name("a1b2c3d4-chime.wav") == "chime.wav"
     assert media_display_name("plain.wav") == "plain.wav"
+
+
+@pytest.mark.parametrize("name", ["D:x.mp3", "C:..\\x.wav", "NUL.wav", "con.mp3", "COM1.ogg"])
+def test_media_names_cannot_escape_or_use_device_names(name):
+    from jeongsi.models import is_safe_media_name
+
+    assert is_safe_media_name(name) is False

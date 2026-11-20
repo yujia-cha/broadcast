@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -347,8 +348,11 @@ def create_app(services: Services) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/broadcast/stop")
-    def broadcast_stop():
-        return {"stopped": s.runner.stop_current()}
+    def broadcast_stop(body: dict | None = Body(default=None)):
+        kind = (body or {}).get("kind")
+        if kind not in (None, "preview", "scheduled", "manual"):
+            raise _bad(422, "알 수 없는 종류입니다.")
+        return {"stopped": s.runner.stop_current(kind=kind)}
 
     @app.post("/api/broadcast/skip")
     def broadcast_skip():
@@ -415,7 +419,9 @@ def create_app(services: Services) -> FastAPI:
 
     @app.post("/api/settings/reset")
     def reset_settings():
-        return patch_settings(Settings().model_dump(mode="json"))
+        # 자동 방송 켜기/끄기는 화면 위쪽 스위치로 따로 다루므로 그대로 둔다
+        defaults = Settings(auto_broadcast=cfg().settings.auto_broadcast)
+        return patch_settings(defaults.model_dump(mode="json"))
 
     @app.get("/api/export")
     def export_config():
@@ -427,6 +433,12 @@ def create_app(services: Services) -> FastAPI:
 
     @app.post("/api/import")
     def import_config(body: dict = Body(...)):
+        from .storage import migrate
+
+        try:
+            body = migrate(dict(body))
+        except ConfigError as exc:
+            raise _bad(422, str(exc)) from exc
         config = Config.model_validate(body)
         s.store.replace(config)
         return {"ok": True}
@@ -455,6 +467,8 @@ def create_app(services: Services) -> FastAPI:
         status_ = s.updater.status()
         if "release" not in status_:
             raise _bad(409, "설치할 새 버전이 없습니다.")
+        if status_.get("state") in ("downloading", "ready"):
+            raise _bad(409, "이미 업데이트를 진행하고 있습니다.")
         if s.runner.on_air:
             raise _bad(409, "방송 중에는 업데이트할 수 없습니다. 방송이 끝난 뒤 다시 시도하세요.")
         exe = s.shell.exe_path()
@@ -464,10 +478,17 @@ def create_app(services: Services) -> FastAPI:
 
         release = ReleaseInfo(**status_["release"])
 
+        s.updater.mark_downloading()  # 스레드 시작 전에 바꿔야 두 번 눌러도 한 번만 진행된다
+
         def work():
             try:
                 # exe와 같은 폴더에 받아야 같은 드라이브 안에서 바로 바꿀 수 있고, 쓰기 권한도 미리 확인된다
                 new_file = s.updater.download(release, exe.parent)
+                # 받는 사이 방송이 시작됐으면 끝날 때까지 기다린 뒤 바꾼다(방송을 끊지 않음)
+                waited = 0
+                while s.runner.busy and waited < 3600:
+                    time.sleep(1)
+                    waited += 1
                 # 포트·데이터 폴더 같은 실행 인자는 새 버전에도 그대로 넘긴다
                 keep = [a for a in sys.argv[1:] if a not in ("--autostart", "--updated")]
                 apply_update(new_file, exe, extra_args=keep)
@@ -475,6 +496,9 @@ def create_app(services: Services) -> FastAPI:
             except UpdateError as exc:
                 log.error("업데이트 실패: %s", exc)
                 s.updater.mark_error(str(exc))
+            except Exception:
+                log.exception("업데이트 중 예상치 못한 오류")
+                s.updater.mark_error("업데이트하지 못했습니다. 잠시 뒤 다시 시도하세요.")
 
         threading.Thread(target=work, name="update", daemon=True).start()
         return {"ok": True}

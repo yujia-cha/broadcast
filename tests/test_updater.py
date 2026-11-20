@@ -212,3 +212,18 @@ def test_cleanup_old_exe_gives_up_quietly(tmp_path, monkeypatch):
     monkeypatch.setattr(type(old), "unlink", locked)
     cleanup_old_exe(exe, attempts=3, delay=0)
     assert len(calls) == 3
+
+
+def test_launch_failure_rolls_back_to_old_version(tmp_path):
+    exe = tmp_path / ASSET_NAME
+    exe.write_bytes(b"old")
+    new = tmp_path / "new.exe"
+    new.write_bytes(b"new")
+
+    def blocked(args):
+        raise PermissionError("백신이 막음")
+
+    with pytest.raises(UpdateError, match="되돌렸습니다"):
+        apply_update(new, exe, launch=blocked)
+    assert exe.read_bytes() == b"old"
+    assert not old_exe_path(exe).exists()

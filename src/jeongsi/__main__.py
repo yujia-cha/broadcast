@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import APP_ID
 from .bootstrap import build_application, default_data_dir, setup_logging
+from .storage import ConfigError
 
 log = logging.getLogger(__name__)
 DEFAULT_PORT = 48650
@@ -78,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     state = ping_existing(args.port)
     if args.updated:
         # 업데이트 직후에는 이전 버전이 끝날 때까지 기다린다
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + 120
         while state != "free" and time.monotonic() < deadline:
             time.sleep(0.5)
             state = ping_existing(args.port)
@@ -95,11 +96,19 @@ def main(argv: list[str] | None = None) -> int:
             ctypes.windll.user32.MessageBoxW(None, message, "정시 방송", 0x10)
         return 1
 
-    if args.dev or sys.platform != "win32":
-        return run_headless(args, data_dir)
-    from .desktop import run_desktop
+    try:
+        if args.dev or sys.platform != "win32":
+            return run_headless(args, data_dir)
+        from .desktop import run_desktop
 
-    return run_desktop(args, data_dir)
+        return run_desktop(args, data_dir)
+    except ConfigError as exc:
+        log.error("시작하지 못했습니다: %s", exc)
+        if sys.platform == "win32" and not args.dev:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, f"{exc}\n\n설정 파일: {data_dir / 'config.json'}", "정시 방송", 0x10)
+        return 1
 
 
 if __name__ == "__main__":

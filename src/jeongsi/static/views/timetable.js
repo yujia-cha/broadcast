@@ -204,7 +204,7 @@ function paintNow(status) {
     return nowEl.replaceChildren(
       h("section", { class: "card" },
         h("div", { class: "ck" }, h("span", null, "미리듣기 중")),
-        h("button", { class: "btn", "data-focus": "stop-preview", on: { click: stopBroadcast } }, icon("stop"), "미리듣기 정지"),
+        h("button", { class: "btn", "data-focus": "stop-preview", on: { click: () => post("/api/broadcast/stop", { kind: "preview" }).catch(toastError) } }, icon("stop"), "미리듣기 정지"),
       ),
     );
   }
