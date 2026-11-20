@@ -23,12 +23,11 @@ def test_status_for_each_kind_of_cell():
         Override(date=date(2026, 11, 19), slot_id="home", action="skip"),
         Override(date=FRI, slot_id="lunch", action="change", time="12:30"),
     ]
-    results = {(MON, "lunch"): "done", (date(2026, 11, 17), "lunch"): "failed"}
     # Act
-    week = build_week(cfg, MON, NOW, results, live=None)
-    # Assert
+    week = build_week(cfg, MON, NOW, live=None)
+    # Assert: 기록을 남기지 않으므로 지난 회차는 모두 past
     lunch = [c["status"] for c in cells(week, "lunch")]
-    assert lunch == ["done", "failed", "off", "missed", "next"]
+    assert lunch == ["past", "past", "off", "past", "next"]
     assert cells(week, "lunch")[4]["changed"] and cells(week, "lunch")[4]["original_time"] == "12:00"
     assert cells(week, "home")[3]["status"] == "off"
     assert cells(week, "home")[4]["status"] == "scheduled"
@@ -37,12 +36,12 @@ def test_status_for_each_kind_of_cell():
 
 
 def test_live_cell_wins_over_other_status():
-    week = build_week(make_config(), MON, NOW, {}, live=(FRI, "morning"))
+    week = build_week(make_config(), MON, NOW, live=(FRI, "morning"))
     assert cells(week, "morning")[4]["status"] == "live"
 
 
 def test_week_start_is_normalized_to_monday():
-    week = build_week(make_config(), FRI, NOW, {}, live=None)
+    week = build_week(make_config(), FRI, NOW, live=None)
     assert week["start"] == "2026-11-16"
 
 
@@ -56,7 +55,7 @@ def test_weekend_columns_appear_only_when_used():
 def test_slot_not_on_that_day_is_none():
     cfg = make_config()
     cfg.slots[0].weekdays = [0]
-    assert [c["status"] for c in cells(build_week(cfg, MON, NOW, {}, None), "morning")][1:] == ["none"] * 4
+    assert [c["status"] for c in cells(build_week(cfg, MON, NOW, None), "morning")][1:] == ["none"] * 4
 
 
 def test_describe_next_includes_units_and_time_left():

@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from jeongsi.app import NullShell, Services, create_app
 from jeongsi.audio.fake import FakePlayer, fake_backend
-from jeongsi.history import History
 from jeongsi.media import MediaLibrary
 from jeongsi.runner import Runner
 from jeongsi.storage import ConfigStore
@@ -45,12 +44,11 @@ def env(tmp_path):
     media = MediaLibrary(tmp_path / "media", backend.player.duration)
     (tmp_path / "media" / "a1b2c3d4-chime.wav").write_bytes(wav_bytes())
     store.replace(make_config())
-    history = History(tmp_path / "history.jsonl")
-    runner = Runner(backend, lambda: store.config.settings, history, media.directory, tmp_path / "work", now=lambda: NOW)
+    runner = Runner(backend, lambda: store.config.settings, media.directory, tmp_path / "work", now=lambda: NOW)
     runner.start()
     shell = RecordingShell()
     services = Services(
-        store=store, history=history, runner=runner, updater=Updater("0.1.0", opener=_offline), audio=backend,
+        store=store, runner=runner, updater=Updater("0.1.0", opener=_offline), audio=backend,
         media=media, data_dir=tmp_path, shell=shell, now=lambda: NOW, allowed_hosts={"testserver"},
     )
     client = TestClient(create_app(services))
@@ -85,7 +83,7 @@ def test_week_marks_past_as_missed_and_next(env):
     lunch = next(r for r in week["rows"] if r["slot"]["id"] == "lunch")
     friday = lunch["cells"][4]
     assert friday["status"] == "next"
-    assert lunch["cells"][0]["status"] == "missed"
+    assert lunch["cells"][0]["status"] == "past"
     assert [d["label"] for d in week["days"]] == ["월", "화", "수", "목", "금"]
 
 
@@ -251,3 +249,23 @@ def test_preview_program_with_missing_file_is_rejected(env):
     body = {"steps": [{"kind": "audio", "file": "a1b2c3d4-gone.wav"}]}
     res = client.post("/api/preview", json=body, headers=HEADERS)
     assert res.status_code == 422 and "찾을 수 없습니다" in res.json()["error"]
+
+
+def test_history_api_is_gone(env):
+    client, _, _ = env
+    assert client.get("/api/history").status_code == 404
+
+
+def test_failure_is_reported_in_status_not_stored(env, tmp_path):
+    client, services, backend = env
+    backend.player.block = False
+    (services.media.directory / "a1b2c3d4-chime.wav").unlink()
+    client.post("/api/broadcast", json={"program_id": "p1"}, headers=HEADERS)
+    import time
+    for _ in range(100):
+        last = client.get("/api/status").json()["runner"]["last"]
+        if last:
+            break
+        time.sleep(0.02)
+    assert last["result"] == "failed" and "소리 파일이 없습니다" in last["error"]
+    assert not list(tmp_path.rglob("*history*"))

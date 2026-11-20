@@ -3,10 +3,9 @@ import { get, patch, post } from "./api.js";
 import { h, icon, openDialog, toast, toastError } from "./ui.js";
 import * as timetable from "./views/timetable.js";
 import * as programs from "./views/programs.js";
-import * as historyView from "./views/history.js";
 import * as settingsView from "./views/settings.js";
 
-const VIEWS = { timetable, programs, history: historyView, settings: settingsView };
+const VIEWS = { timetable, programs, settings: settingsView };
 const POLL_MS = 1000;
 
 export const ctx = {
@@ -15,6 +14,7 @@ export const ctx = {
   media: [],
   voices: [],
   connected: true,
+  dismissedFailure: null,
   async loadPrograms() {
     ctx.programs = await get("/api/programs");
     return ctx.programs;
@@ -97,11 +97,20 @@ function renderBanners(status) {
   if (!ctx.connected) {
     items.push(h("div", { class: "banner error", role: "alert" }, icon("alert"), h("span", { class: "grow" }, "앱과 연결이 끊겼습니다. 다시 연결하는 중입니다.")));
   }
+  const last = status?.runner?.last;
+  if (last?.result === "failed" && ctx.dismissedFailure !== last.finished_at) {
+    items.push(
+      h("div", { class: "banner error", role: "alert" }, icon("alert"),
+        h("span", { class: "grow" }, `${last.kind === "preview" ? "미리듣기" : `'${last.name}' 방송`}을 재생하지 못했습니다. ${last.error}`),
+        h("button", { class: "link", on: { click: () => { ctx.dismissedFailure = last.finished_at; renderBanners(ctx.status); } } }, "닫기"),
+      ),
+    );
+  }
   if (status?.warning) items.push(h("div", { class: "banner warn" }, icon("alert"), h("span", { class: "grow" }, status.warning)));
   if (status && !status.auto_broadcast) {
     items.push(
       h("div", { class: "banner warn" }, icon("alert"),
-        h("span", { class: "grow" }, "자동 방송이 꺼져 있어 예약한 방송이 나가지 않습니다."),
+        h("span", { class: "grow" }, "자동 방송이 꺼져 있습니다."),
         h("button", { class: "link", on: { click: toggleAuto } }, "켜기"),
       ),
     );
@@ -109,7 +118,7 @@ function renderBanners(status) {
   if (status && !status.voices_ok) {
     items.push(
       h("div", { class: "banner" }, icon("alert"),
-        h("span", { class: "grow" }, "한국어 음성이 설치되어 있지 않습니다. Windows 설정 › 시간 및 언어 › 음성에서 한국어 음성을 추가하세요."),
+        h("span", { class: "grow" }, "한국어 음성이 없습니다. Windows 설정 › 시간 및 언어 › 음성에서 추가하세요."),
       ),
     );
   }
@@ -139,7 +148,7 @@ function openUpdateDialog() {
       h("span", { class: "meta" }, `현재 v${upd.current}${published ? ` · ${published} 배포` : ""}`),
       rel.notes ? h("pre", { class: "notes" }, rel.notes) : null,
       h("div", { class: "progress", hidden: true }, (bar = h("i"))),
-      (msg = h("p", { class: "hint" }, "업데이트하면 앱이 몇 초 동안 다시 시작됩니다. 방송 중에는 업데이트할 수 없습니다.")),
+      (msg = h("p", { class: "hint" }, "업데이트하면 앱이 다시 시작됩니다.")),
       h("div", { class: "dlg-foot" },
         h("a", { class: "link", href: rel.html_url, target: "_blank", rel: "noopener" }, "릴리즈 페이지"),
         h("span", { class: "grow" }),

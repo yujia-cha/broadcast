@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Literal
 
 from .audio.base import AudioBackend
-from .history import History, HistoryEntry
 from .models import Program, Settings, Step
 from .storage import atomic_write_text
 
@@ -93,7 +92,6 @@ class Runner:
         self,
         audio: AudioBackend,
         settings: Callable[[], Settings],
-        history: History,
         media_dir: Path,
         work_dir: Path,
         now: Callable[[], datetime] = datetime.now,
@@ -101,7 +99,7 @@ class Runner:
     ):
         self._audio = audio
         self._settings = settings
-        self._history = history
+        self._last: dict | None = None  # 마지막 결과(메모리에만, 실패 알림용). 방송 기록은 남기지 않는다.
         self._media_dir = media_dir
         self._work_dir = work_dir
         self._now = now
@@ -160,9 +158,15 @@ class Runner:
         self._interrupt.set()
         return True
 
+    @property
+    def last_result(self) -> dict | None:
+        with self._lock:
+            return dict(self._last) if self._last else None
+
     def status(self) -> dict:
         with self._lock:
             snap = dict(self._status)
+            snap["last"] = dict(self._last) if self._last else None
         if snap.get("play_started") is not None:
             snap["play_elapsed"] = round(_time.monotonic() - snap.pop("play_started"), 1)
         else:
@@ -222,7 +226,6 @@ class Runner:
                 "play_started": None,
             }
         self._on_change()
-        started_at = self._now()
         result, error = "done", ""
         restore = RestoreState()
         try:
@@ -241,19 +244,13 @@ class Runner:
                 self._restore(restore)
             with self._lock:
                 self._status = {"state": "idle"}
-            if job.kind != "preview":
-                self._history.append(
-                    HistoryEntry(
-                        kind=job.kind,  # type: ignore[arg-type]
-                        name=job.name,
-                        slot_id=job.slot_id,
-                        date=job.date,
-                        started_at=started_at,
-                        ended_at=self._now(),
-                        result=result,  # type: ignore[arg-type]
-                        error=error,
-                    )
-                )
+                self._last = {
+                    "kind": job.kind,
+                    "name": job.name,
+                    "result": result,
+                    "error": error,
+                    "finished_at": self._now().isoformat(timespec="seconds"),
+                }
             self._on_change()
 
     def _play_units(self, units: list[PlayUnit], settings: Settings) -> None:

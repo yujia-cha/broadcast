@@ -169,35 +169,32 @@ def test_miniaudio_play_and_interrupt(tmp_path):
 def test_full_broadcast_with_windows_backend(tmp_path):
     """실제 Windows 백엔드로 방송 하나를 끝까지 실행한다. 장치가 없으면 실패 사유가 기록에 남는다."""
     from jeongsi.audio.windows import windows_backend
-    from jeongsi.history import History
     from jeongsi.models import Program, Settings, Step
     from jeongsi.runner import Job, Runner
 
     media = tmp_path / "media"
     media.mkdir()
     make_wav(media / "a1b2c3d4-chime.wav", 0.3)
-    history = History(tmp_path / "history.jsonl")
-    runner = Runner(windows_backend(), lambda: Settings(), history, media, tmp_path / "work")
+    runner = Runner(windows_backend(), lambda: Settings(), media, tmp_path / "work")
     program = Program(name="시험", steps=[Step(kind="audio", file="a1b2c3d4-chime.wav"), Step(kind="tts", text="시험 방송입니다.")])
     runner._execute(Job(kind="manual", name="시험", program=program))
-    entry = history.recent()[0]
-    print("broadcast result:", entry.result, entry.error)
+    entry = runner.last_result
+    print("broadcast result:", entry["result"], entry["error"])
     assert not (tmp_path / "work" / "restore.json").exists()
-    if entry.result == "failed":
+    if entry["result"] == "failed":
         try:
             import miniaudio
 
             miniaudio.PlaybackDevice().close()
         except Exception:
-            pytest.skip(f"재생 장치가 없어 재생 단계에서 실패: {entry.error}")
-    assert entry.result == "done", entry.error
+            pytest.skip(f"재생 장치가 없어 재생 단계에서 실패: {entry["error"]}")
+    assert entry["result"] == "done", entry["error"]
 
 
 def test_full_broadcast_pipeline_with_real_adapters(tmp_path):
     """재생만 가짜로 두고 실제 Windows 어댑터(일시정지·음소거·음량·TTS)로 방송을 끝까지 실행한다."""
     from jeongsi.audio.fake import FakePlayer
     from jeongsi.audio.windows import windows_backend
-    from jeongsi.history import History
     from jeongsi.models import Program, Settings, Step
     from jeongsi.runner import Job, Runner
 
@@ -206,11 +203,10 @@ def test_full_broadcast_pipeline_with_real_adapters(tmp_path):
     media = tmp_path / "media"
     media.mkdir()
     make_wav(media / "a1b2c3d4-chime.wav", 0.3)
-    history = History(tmp_path / "history.jsonl")
-    runner = Runner(backend, lambda: Settings(), history, media, tmp_path / "work")
+    runner = Runner(backend, lambda: Settings(), media, tmp_path / "work")
     program = Program(name="test", steps=[Step(kind="audio", file="a1b2c3d4-chime.wav"), Step(kind="tts", text="Broadcast test.", repeat=2)])
     runner._execute(Job(kind="manual", name="test", program=program))
-    entry = history.recent()[0]
-    assert entry.result == "done", entry.error
+    entry = runner.last_result
+    assert entry["result"] == "done", entry["error"]
     assert backend.player.played[0] == "a1b2c3d4-chime.wav" and len(backend.player.played) == 3
     assert not (tmp_path / "work" / "restore.json").exists()

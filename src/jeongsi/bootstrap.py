@@ -13,7 +13,6 @@ from pathlib import Path
 from . import APP_ID, __version__
 from .app import Services, Shell
 from .audio import default_backend
-from .history import History
 from .media import MediaLibrary
 from .runner import Job, Runner
 from .scheduler import Scheduler
@@ -70,13 +69,11 @@ def build_application(data_dir: Path, port: int, shell: Shell, use_fake_audio: b
     data_dir.mkdir(parents=True, exist_ok=True)
     audio = default_backend(use_fake=use_fake_audio)
     store = ConfigStore(data_dir / "config.json")
-    history = History(data_dir / "history.jsonl")
     media = MediaLibrary(data_dir / "media", audio.player.duration)
-    runner = Runner(audio, lambda: store.config.settings, history, media.directory, data_dir / "work")
+    runner = Runner(audio, lambda: store.config.settings, media.directory, data_dir / "work")
     updater = Updater(__version__, feed_url=os.environ.get(FEED_ENV) or None)
     services = Services(
         store=store,
-        history=history,
         runner=runner,
         updater=updater,
         audio=audio,

@@ -6,7 +6,6 @@ from datetime import date
 import pytest
 
 from jeongsi.audio.fake import FakePlayer, FakeSpeech, fake_backend
-from jeongsi.history import History
 from jeongsi.models import Program, Settings, Step
 from jeongsi.runner import Job, Runner, RunnerBusy, expand_program, estimate_program_seconds
 
@@ -16,10 +15,9 @@ def make_runner(tmp_path, backend=None, settings=None):
     media = tmp_path / "media"
     media.mkdir(exist_ok=True)
     (media / "a1b2c3d4-chime.wav").write_bytes(b"")
-    history = History(tmp_path / "history.jsonl")
-    runner = Runner(backend, lambda: settings or Settings(), history, media, tmp_path / "work")
+    runner = Runner(backend, lambda: settings or Settings(), media, tmp_path / "work")
     (tmp_path / "work").mkdir(exist_ok=True)
-    return runner, backend, history
+    return runner, backend, runner
 
 
 def program(repeat=2, gap=0.0):
@@ -48,7 +46,7 @@ def wait_until(predicate, timeout=3.0):
 
 def test_broadcast_ducks_then_restores_in_reverse_order(tmp_path):
     # Arrange
-    runner, backend, history = make_runner(tmp_path)
+    runner, backend, _ = make_runner(tmp_path)
     calls = backend.media.calls
     # Act
     runner._execute(job())
@@ -61,7 +59,7 @@ def test_broadcast_ducks_then_restores_in_reverse_order(tmp_path):
         ("unmute", ["chrome", "game"]),  # 이미 음소거였던 'already'는 건드리지 않음
         ("resume", ["chrome"]),
     ]
-    assert history.recent()[0].result == "done"
+    assert runner.last_result["result"] == "done"
     assert not (tmp_path / "work" / "restore.json").exists()
 
 
@@ -84,33 +82,41 @@ def test_failure_still_restores_and_records_failed(tmp_path):
     # Arrange: 음성 합성이 실패하는 상황
     backend = fake_backend()
     backend.speech = FakeSpeech(fail=True)
-    runner, backend, history = make_runner(tmp_path, backend)
+    runner, backend, _ = make_runner(tmp_path, backend)
     # Act
     runner._execute(job())
     # Assert
     assert ("resume", ["chrome"]) in backend.media.calls
-    entry = history.recent()[0]
-    assert entry.result == "failed" and "음성 합성" in entry.error
+    last = runner.last_result
+    assert last["result"] == "failed" and "음성 합성" in last["error"]
 
 
 def test_missing_audio_file_fails_with_clear_message(tmp_path):
-    runner, _, history = make_runner(tmp_path)
+    runner, _, _ = make_runner(tmp_path)
     (tmp_path / "media" / "a1b2c3d4-chime.wav").unlink()
     runner._execute(job())
-    assert "소리 파일이 없습니다" in history.recent()[0].error
+    assert "소리 파일이 없습니다" in runner.last_result["error"]
 
 
-def test_preview_does_not_duck_or_record_history(tmp_path):
-    runner, backend, history = make_runner(tmp_path)
+def test_preview_does_not_duck(tmp_path):
+    runner, backend, _ = make_runner(tmp_path)
     runner._execute(job(kind="preview"))
-    assert backend.media.calls == [] and history.recent() == []
+    assert backend.media.calls == [] and runner.last_result["kind"] == "preview"
+
+
+def test_no_history_file_is_written(tmp_path):
+    # 방송 기록은 남기지 않는다(마지막 결과는 메모리에만)
+    runner, _, _ = make_runner(tmp_path)
+    runner._execute(job())
+    assert not list(tmp_path.rglob("*history*"))
+    assert runner.status()["last"]["result"] == "done"
 
 
 def test_stop_ends_broadcast_restores_and_records_stopped(tmp_path):
     # Arrange: 재생이 interrupt를 기다리도록
     backend = fake_backend()
     backend.player = FakePlayer(block=True)
-    runner, backend, history = make_runner(tmp_path, backend)
+    runner, backend, _ = make_runner(tmp_path, backend)
     runner.start()
     try:
         runner.enqueue(job())
@@ -118,8 +124,8 @@ def test_stop_ends_broadcast_restores_and_records_stopped(tmp_path):
         # Act
         assert runner.stop_current()
         # Assert
-        assert wait_until(lambda: history.recent())
-        assert history.recent()[0].result == "stopped"
+        assert wait_until(lambda: runner.last_result)
+        assert runner.last_result["result"] == "stopped"
         assert backend.player.played == ["a1b2c3d4-chime.wav"]
         assert ("resume", ["chrome"]) in backend.media.calls
         assert runner.status()["state"] == "idle"
@@ -130,7 +136,7 @@ def test_stop_ends_broadcast_restores_and_records_stopped(tmp_path):
 def test_skip_moves_to_next_unit(tmp_path):
     backend = fake_backend()
     backend.player = FakePlayer(block=True)
-    runner, backend, history = make_runner(tmp_path, backend)
+    runner, backend, _ = make_runner(tmp_path, backend)
     runner.start()
     try:
         runner.enqueue(job(prog=program(repeat=1)))
@@ -138,8 +144,8 @@ def test_skip_moves_to_next_unit(tmp_path):
         runner.skip_current()
         assert wait_until(lambda: runner.status().get("index") == 1)
         runner.skip_current()
-        assert wait_until(lambda: history.recent())
-        assert history.recent()[0].result == "done"
+        assert wait_until(lambda: runner.last_result)
+        assert runner.last_result["result"] == "done"
         assert len(backend.player.played) == 2
     finally:
         runner.shutdown()
@@ -166,13 +172,12 @@ def test_preview_is_refused_while_busy(tmp_path):
 
 
 def test_jobs_run_one_after_another(tmp_path):
-    runner, backend, history = make_runner(tmp_path)
+    runner, backend, _ = make_runner(tmp_path)
     runner.start()
     try:
         runner.enqueue(job())
         runner.enqueue(job())
-        assert wait_until(lambda: len(history.recent()) == 2)
-        assert backend.media.calls.count(("pause",)) == 2
+        assert wait_until(lambda: backend.media.calls.count(("resume", ["chrome"])) == 2 and not runner.busy)
     finally:
         runner.shutdown()
 
@@ -216,10 +221,10 @@ def test_ducking_failures_do_not_stop_broadcast(tmp_path):
     backend = fake_backend()
     backend.muter = Broken()
     backend.volume = Broken()
-    runner, backend, history = make_runner(tmp_path, backend)
+    runner, backend, _ = make_runner(tmp_path, backend)
     # Act
     runner._execute(job())
     # Assert: 일시정지·재생·복원은 그대로 진행
-    assert history.recent()[0].result == "done"
+    assert runner.last_result["result"] == "done"
     assert backend.media.calls == [("pause",), ("resume", ["chrome"])]
     assert len(backend.player.played) == 3

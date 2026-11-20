@@ -24,7 +24,6 @@ from pydantic import ValidationError
 
 from . import APP_ID, __version__
 from .audio.base import AudioBackend, Voice
-from .history import History
 from .media import MediaError, MediaLibrary
 from .models import Config, DayOff, Override, Program, Settings, Slot, Step
 from .runner import Job, Runner, RunnerBusy
@@ -68,7 +67,6 @@ class NullShell:
 @dataclass
 class Services:
     store: ConfigStore
-    history: History
     runner: Runner
     updater: Updater
     audio: AudioBackend
@@ -206,7 +204,7 @@ def create_app(services: Services) -> FastAPI:
         live = None
         if runner.get("kind") == "scheduled" and runner.get("slot_id") and runner.get("date"):
             live = (date.fromisoformat(runner["date"]), runner["slot_id"])
-        return build_week(cfg(), start or week_start(now.date()), now, s.history.results_by_occurrence(), live)
+        return build_week(cfg(), start or week_start(now.date()), now, live)
 
     # 방송 구성 ---------------------------------------------------------------
     def program_view(p: Program, config: Config) -> dict:
@@ -397,12 +395,6 @@ def create_app(services: Services) -> FastAPI:
     @app.get("/api/voices")
     def voices():
         return [{"id": v.id, "name": v.name, "language": v.language, "korean": _is_korean(v)} for v in s.voices()]
-
-    # 기록 ------------------------------------------------------------------
-    @app.get("/api/history")
-    def history(limit: int = 200):
-        limit = max(1, min(limit, 1000))
-        return [e.model_dump(mode="json") for e in s.history.recent(limit)]
 
     # 설정 ------------------------------------------------------------------
     @app.get("/api/settings")

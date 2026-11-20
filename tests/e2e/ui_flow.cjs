@@ -130,10 +130,8 @@ async function main() {
       await page.waitForSelector(".card.liveC", { state: "detached", timeout: 10000 });
     });
 
-    await step("기록에 남음", async () => {
-      await page.click(".nav >> text=기록");
-      await page.waitForSelector("td >> text=점심 안내");
-      await shot("06-history");
+    await step("방송 기록 메뉴 없음", async () => {
+      if (await page.locator(".nav >> text=기록").count()) throw new Error("기록 메뉴가 남아 있습니다");
     });
 
     await step("설정: 체크박스 저장, 어두운 테마", async () => {
@@ -153,9 +151,9 @@ async function main() {
 
     await step("자동 방송 끄기 → 안내 띠 → 켜기", async () => {
       await page.click("#auto-switch");
-      await page.waitForSelector("text=자동 방송이 꺼져 있어");
+      await page.waitForSelector(".banner >> text=자동 방송이 꺼져 있습니다");
       await page.click(".banner >> text=켜기");
-      await page.waitForSelector("text=자동 방송이 꺼져 있어", { state: "detached" });
+      await page.waitForSelector(".banner >> text=자동 방송이 꺼져 있습니다", { state: "detached" });
     });
 
     if (errors.length) throw new Error(`콘솔 오류: ${errors.join(" | ")}`);

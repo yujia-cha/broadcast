@@ -99,7 +99,7 @@ function renderEditor() {
   }
   const d = st.draft;
   const nameInput = h("input", {
-    class: "input", value: d.name, maxlength: 40, placeholder: "방송 구성 이름 (예: 점심 안내)", "aria-label": "방송 구성 이름",
+    class: "input", value: d.name, maxlength: 40, placeholder: "이름 (예: 점심 안내)", "aria-label": "방송 구성 이름",
     "aria-invalid": st.errors.includes("name") ? "true" : null,
     on: { input: (e) => { d.name = e.target.value; } },
   });
@@ -121,7 +121,7 @@ function renderEditor() {
     h("button", { class: "btn pri", on: { click: save } }, "저장"),
   );
   const intro = !ctx.programs.length
-    ? h("p", { class: "meta", style: { margin: 0 } }, "방송 구성은 차임, 음성 안내, 음악처럼 한 번에 내보낼 소리를 순서대로 쌓은 것입니다. 저장한 뒤 시간표에서 언제 내보낼지 정하세요.")
+    ? h("p", { class: "meta", style: { margin: 0 } }, "차임·음성·음악을 순서대로 쌓아 한 번에 내보냅니다.")
     : null;
   editorEl.replaceChildren(...[intro, h("div", { class: "editor-head" }, nameInput), steps, addBar, errMsg, foot].filter(Boolean));
 }
@@ -144,7 +144,7 @@ function stepCard(step, i) {
     h("div", { class: "step-row" },
       h("span", { class: "chip" }, step.kind === "tts" ? "음성(TTS)" : "음악·소리"),
       h("input", {
-        class: "input", value: step.label, maxlength: 20, placeholder: step.kind === "tts" ? "단계 이름 (선택, 기본: 음성)" : "단계 이름 (선택, 예: 차임)",
+        class: "input", value: step.label, maxlength: 20, placeholder: "단계 이름 (선택)",
         "aria-label": `${i + 1}단계 이름`, style: { flex: "1", minWidth: "160px" },
         on: { input: (e) => { step.label = e.target.value; } },
       }),
@@ -173,14 +173,14 @@ function ttsFields(step, id) {
   const voices = ctx.voices || [];
   return [
     h("textarea", {
-      class: "input", maxlength: 2000, rows: 3, placeholder: "읽어 줄 문구 (예: 점심시간입니다. 손을 씻고 급식실로 이동해 주세요.)",
+      class: "input", maxlength: 2000, rows: 3, placeholder: "읽어 줄 문구",
       "aria-label": "읽어 줄 문구", value: step.text,
       on: { input: (e) => { step.text = e.target.value; } },
     }),
     h("div", { class: "step-row" },
       h("label", { class: "lbl", for: `${id}-voice` }, "음성"),
       h("select", { class: "input", id: `${id}-voice`, style: { maxWidth: "280px" }, on: { change: (e) => { step.voice = e.target.value; } } },
-        h("option", { value: "", selected: !step.voice }, "기본 음성 (설정에서 고름)"),
+        h("option", { value: "", selected: !step.voice }, "기본 음성"),
         voices.map((v) => h("option", { value: v.id, selected: v.id === step.voice }, v.name)),
       ),
       h("label", { class: "lbl", for: `${id}-rate` }, "속도"),
@@ -357,9 +357,9 @@ function openMediaDialog() {
             const users = usedBy(m.name);
             return h("div", { class: "notice" },
               h("span", { style: { minWidth: 0, overflowWrap: "anywhere" } },
-                m.display, h("span", { class: "hint" }, ` · ${m.seconds ? fmtDuration(m.seconds) : "길이 모름"} · ${users.length ? users.join(", ") : "쓰지 않음"}`)),
+                m.display, h("span", { class: "hint" }, ` · ${m.seconds ? fmtDuration(m.seconds) : "길이 모름"}${users.length ? ` · ${users.join(", ")}` : ""}`)),
               h("button", {
-                class: "link", disabled: users.length > 0, title: users.length ? "쓰는 방송 구성이 있어 지울 수 없습니다" : null,
+                class: "link", disabled: users.length > 0, title: users.length ? "사용 중인 파일은 지울 수 없습니다" : null,
                 on: { click: async () => {
                   try {
                     await del(`/api/media/${encodeURIComponent(m.name)}`);
@@ -373,13 +373,12 @@ function openMediaDialog() {
               }, "삭제"),
             );
           })
-        : [h("p", { class: "hint" }, "올린 소리 파일이 없습니다. 음악·소리 단계에서 파일을 올리세요.")]),
+        : [h("p", { class: "hint" }, "올린 파일이 없습니다.")]),
     );
   };
   openDialog("올린 소리 파일", (close) =>
     h("div", { class: "dlg" },
       h("h2", null, "올린 소리 파일"),
-      h("p", { class: "hint" }, "방송 구성에서 쓰지 않는 파일만 지울 수 있습니다."),
       (list = h("div", { style: { display: "grid", gap: "var(--s2)", maxHeight: "320px", overflow: "auto" } })),
       (errEl = h("p", { class: "err", role: "alert" })),
       h("div", { class: "dlg-foot" }, h("button", { class: "btn", on: { click: () => close() } }, "닫기")),

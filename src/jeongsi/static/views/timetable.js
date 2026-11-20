@@ -84,7 +84,6 @@ function renderGrid() {
     h("button", { class: "btn sm", disabled: isThisWeek(), on: { click: () => { st.start = null; loadWeek(); } } }, "이번 주"),
     h("button", { class: "btn sm ghost", on: { click: () => openDaysOffDialog() } }, icon("calendarOff"), "쉬는 날"),
     h("div", { class: "legend", "aria-hidden": "true" },
-      h("span", null, h("i", { class: "lg-done" }), "완료"),
       h("span", null, h("i", { class: "lg-chg" }), "이 날만 변경"),
       h("span", null, h("i", { class: "lg-off" }), "쉼"),
     ),
@@ -95,9 +94,7 @@ function renderGrid() {
     mainEl.replaceChildren(bar,
       h("div", { class: "card empty" },
         h("h3", null, "아직 회차가 없습니다"),
-        h("p", null, noPrograms
-          ? "먼저 방송 구성(음성 안내와 음악 순서)을 만든 뒤, 언제 내보낼지 회차를 추가하세요."
-          : "회차를 추가하면 정해진 요일·시각에 방송 구성을 자동으로 내보냅니다."),
+        noPrograms ? h("p", null, "먼저 내보낼 방송 구성을 만드세요.") : null,
         noPrograms
           ? h("button", { class: "btn pri", on: { click: () => ctx.go("programs") } }, "방송 구성 만들기")
           : h("button", { class: "btn pri", on: { click: () => openSlotDialog(null) } }, icon("plus"), "회차 추가"),
@@ -136,7 +133,7 @@ function renderGrid() {
   mainEl.replaceChildren(bar, grid);
 }
 
-const STATUS_LABEL = { done: "완료", failed: "실패", missed: "방송 안 함", off: "쉼", next: "다음", live: "방송 중", scheduled: "예정" };
+const STATUS_LABEL = { past: "지남", off: "쉼", next: "다음", live: "방송 중", scheduled: "예정" };
 
 function renderCell(row, cell, day) {
   const today = day.is_today ? " today" : "";
@@ -156,7 +153,7 @@ function renderCell(row, cell, day) {
   }
 
   const label = h("span", { class: "st" },
-    cell.status === "done" ? icon("check") : cell.status === "live" ? h("span", { class: "dot" }) : null,
+    cell.status === "live" ? h("span", { class: "dot" }) : null,
     STATUS_LABEL[cell.status],
   );
   return h("div", { class: cls, role: "gridcell" },
@@ -239,7 +236,6 @@ function liveCard(r) {
       h("button", { class: "btn", "data-focus": "skip", disabled: r.state !== "playing", on: { click: skipStep } }, icon("skip"), "다음 단계로"),
       h("button", { class: "btn stop", "data-focus": "stop", disabled: r.state === "restoring", on: { click: stopBroadcast } }, icon("stop"), "방송 끄기"),
     ),
-    h("p", { class: "hint" }, "방송이 끝나거나 끄면 멈췄던 영상·음악과 음량을 원래대로 되돌립니다."),
   );
 }
 
@@ -255,7 +251,7 @@ function nextCard(status) {
     return h("section", { class: "card" }, notice,
       h("div", { class: "ck" }, h("span", null, "다음 방송")),
       h("span", { class: "nm" }, "예정된 방송이 없습니다"),
-      h("p", { class: "hint" }, status.auto_broadcast ? "시간표에 회차를 추가하면 여기에 다음 방송이 보입니다." : "자동 방송이 꺼져 있습니다."),
+      status.auto_broadcast ? null : h("p", { class: "hint" }, "자동 방송이 꺼져 있습니다."),
     );
   }
   const today = status.now.slice(0, 10);
@@ -270,7 +266,6 @@ function nextCard(status) {
       h("button", { class: "btn pri", "data-focus": "now", on: { click: () => broadcastNow(n) } }, icon("play"), "지금 방송"),
       h("button", { class: "btn", "data-focus": "skip-next", on: { click: skipNext } }, "이번 방송 끄기"),
     ),
-    h("p", { class: "hint" }, `끄면 ${n.date === today ? "오늘" : fmtDate(n.date)} ${n.time} 방송만 쉽니다. 다음 주 일정은 그대로입니다.`),
   );
 }
 
@@ -335,7 +330,7 @@ function renderSel() {
     selEl.replaceChildren(
       h("section", { class: "card" },
         h("div", { class: "ck" }, h("span", null, "선택한 칸")),
-        h("p", { class: "hint" }, "시간표의 칸을 누르면 그 날짜만 쉬거나 시각·구성을 바꿀 수 있습니다. 요일 머리글을 누르면 하루를 통째로 쉬게 할 수 있습니다."),
+        h("p", { class: "hint" }, "칸이나 요일을 누르면 그 날만 쉬거나 바꿀 수 있습니다."),
       ),
     );
     return;
@@ -353,12 +348,12 @@ function renderSel() {
 
 function cellCard(row, cell, day) {
   const title = `${fmtDate(cell.date)} · ${row.slot.name}`;
-  const past = ["done", "failed", "missed", "live"].includes(cell.status);
+  const past = ["past", "live"].includes(cell.status);
   if (past) {
     return h("section", { class: "card" },
       h("div", { class: "ck" }, h("span", null, "선택한 칸")),
       h("span", { class: "nm", style: { fontSize: "15px" } }, title),
-      h("p", { class: "meta", style: { margin: 0 } }, cell.status === "live" ? "지금 방송 중인 회차입니다." : "지난 회차라 바꿀 수 없습니다."),
+      h("p", { class: "meta", style: { margin: 0 } }, cell.status === "live" ? "방송 중입니다." : "지난 회차입니다."),
     );
   }
   const ov = cell.override;
@@ -425,10 +420,9 @@ function cellCard(row, cell, day) {
   return h("section", { class: "card" },
     h("div", { class: "ck" }, h("span", null, "선택한 칸")),
     h("span", { class: "nm", style: { fontSize: "15px" } }, title),
-    day.day_off && !ov ? h("p", { class: "hint" }, `이 날은 쉬는 날${day.day_off.memo ? `(${day.day_off.memo})` : ""}입니다. 바꾸기로 지정하면 이 회차만 방송합니다.`) : null,
+    day.day_off && !ov ? h("p", { class: "hint" }, "쉬는 날입니다. '바꾸기'를 하면 이 회차만 방송합니다.") : null,
     radios,
     fieldsEl,
-    h("p", { class: "hint" }, "이 날짜에만 적용됩니다. 매주 바꾸려면 회차의 '매주 일정 편집'을 누르세요."),
   );
 }
 
@@ -607,7 +601,6 @@ async function openDaysOffDialog(prefill) {
   openDialog("쉬는 날", (close) =>
     h("div", { class: "dlg" },
       h("h2", null, "쉬는 날"),
-      h("p", { class: "hint" }, "이 기간에는 모든 회차를 방송하지 않습니다. 특정 회차를 '바꾸기'로 지정하면 그 회차만 방송합니다."),
       (list = h("div", { style: { display: "grid", gap: "var(--s2)", maxHeight: "220px", overflow: "auto" } })),
       h("form", { style: { display: "grid", gap: "var(--s3)" }, on: { submit: async (e) => {
         e.preventDefault();

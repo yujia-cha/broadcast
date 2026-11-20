@@ -77,7 +77,8 @@ def check(name: str, fn) -> None:
 def broadcast_once(port: int, text: str) -> dict:
     program = call(port, "POST", "/api/programs", {"name": "스모크", "steps": [{"kind": "tts", "text": text}]})
     call(port, "POST", "/api/broadcast", {"program_id": program["id"]})
-    return wait_for(lambda: (call(port, "GET", "/api/history") or [None])[0], timeout=90)
+    # 방송 기록은 남기지 않으므로 상태의 마지막 결과(메모리)로 확인한다
+    return wait_for(lambda: call(port, "GET", "/api/status")["runner"].get("last"), timeout=90)
 
 
 def dump_log(data_dir: Path) -> None:

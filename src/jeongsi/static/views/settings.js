@@ -48,12 +48,12 @@ function defaultNote(key, text) {
 }
 
 function paintDefault(el, changed, text) {
-  el.className = `def${changed ? " changed" : ""}`;
-  el.textContent = changed ? `기본: ${text}` : "기본값";
+  el.className = "def changed";
+  el.textContent = changed ? `기본: ${text}` : "";
 }
 
 // 체크박스는 그 줄만 갱신한다(화면 전체를 다시 그리면 "저장됨" 표시와 포커스가 사라진다)
-function checkRow(key, title, desc, defText) {
+function checkRow(key, title, defText, desc = "") {
   const id = `set-${key}`;
   const saved = h("span", { class: "saved", "aria-live": "polite" });
   const def = defaultNote(key, defText);
@@ -61,7 +61,7 @@ function checkRow(key, title, desc, defText) {
     h("input", { type: "checkbox", id, checked: settings[key], on: { change: async (e) => {
       if (await save({ [key]: e.target.checked }, saved)) paintDefault(def, settings[key] !== DEFAULTS[key], defText);
     } } }),
-    h("label", { for: id }, h("span", null, title), h("span", { class: "d" }, desc), saved),
+    h("label", { for: id }, h("span", null, title), desc ? h("span", { class: "d" }, desc) : null, saved),
     def,
   );
 }
@@ -86,13 +86,12 @@ function render() {
 
   const page = h("div", { class: "page" },
     h("h2", null, "설정"),
-    h("p", { class: "hint" }, "바꾸면 바로 저장됩니다. 처음 값 그대로 써도 됩니다."),
 
     h("section", { class: "card sgrp", "aria-labelledby": "g-start" },
       h("h3", { id: "g-start" }, "시작과 창"),
-      checkRow("autostart", "Windows에 로그인하면 자동 실행", "끄면 직접 실행하기 전까지 예약 방송이 나가지 않습니다.", "켬"),
-      checkRow("close_to_tray", "창을 닫으면 트레이로 보내기", "끄면 창을 닫을 때 앱이 종료되어 예약 방송이 나가지 않습니다.", "켬"),
-      checkRow("open_window_on_autostart", "자동 실행할 때 창 열기", "끄면 트레이 아이콘으로만 조용히 시작합니다.", "끔"),
+      checkRow("autostart", "Windows에 로그인하면 자동 실행", "켬"),
+      checkRow("close_to_tray", "창을 닫으면 트레이로 보내기", "켬"),
+      checkRow("open_window_on_autostart", "자동 실행할 때 창 열기", "끔"),
     ),
 
     h("section", { class: "card sgrp", "aria-labelledby": "g-sound" },
@@ -109,12 +108,12 @@ function render() {
             volSlider,
             volValue, volSaved,
           ),
-          h("span", { class: "d" }, "PC가 음소거여도 방송 동안만 풀고, 끝나면 원래 음량·음소거로 되돌립니다."),
+          h("span", { class: "d" }, "방송이 끝나면 원래 음량으로 돌아갑니다."),
         ),
         volDef,
       ),
-      checkRow("pause_media", "재생 중인 영상·음악 일시정지", "YouTube, Spotify처럼 일시정지를 지원하는 앱. 방송이 끝나면 다시 재생합니다.", "켬"),
-      checkRow("mute_others", "다른 앱 소리 음소거", "일시정지를 지원하지 않는 앱과 알림음까지 방송 동안 음소거합니다.", "켬"),
+      checkRow("pause_media", "방송 중 영상·음악 일시정지", "켬"),
+      checkRow("mute_others", "방송 중 다른 앱 소리 끄기", "켬"),
     ),
 
     h("section", { class: "card sgrp", "aria-labelledby": "g-voice" },
@@ -134,7 +133,6 @@ function render() {
             h("button", { class: "btn sm", on: { click: () => post("/api/preview", { kind: "tts", text: "안녕하세요. 정시 방송 음성 시험입니다.", voice: settings.default_voice, rate: settings.default_rate }).catch(toastError) } }, "미리듣기"),
             rateSaved,
           ),
-          h("span", { class: "d" }, "단계에서 음성을 따로 고르지 않으면 이 음성을 씁니다."),
         ),
         h("span"),
       ),
@@ -162,7 +160,7 @@ function render() {
 
     h("section", { class: "card sgrp", "aria-labelledby": "g-update" },
       h("h3", { id: "g-update" }, "업데이트"),
-      checkRow("check_updates", "새 버전 자동 확인", "앱을 켤 때와 하루 한 번 확인합니다. 설치는 업데이트 버튼을 눌렀을 때만 합니다.", "켬"),
+      checkRow("check_updates", "새 버전 자동 확인", "켬"),
       h("div", { class: "srow" },
         h("span"),
         h("div", { class: "step-row" },
@@ -194,7 +192,6 @@ function render() {
             importButton(),
             h("button", { class: "btn sm", on: { click: () => post("/api/open-data-folder").catch(toastError) } }, "데이터 폴더 열기"),
           ),
-          h("span", { class: "d" }, "내보낸 파일에는 방송 구성·시간표·설정이 들어 있습니다. 소리 파일은 데이터 폴더의 media에 있습니다."),
         ),
         h("span"),
       ),
@@ -202,7 +199,6 @@ function render() {
         h("span"),
         h("div", { class: "step-row" },
           h("button", { class: "btn sm", on: { click: resetDefaults } }, "모든 설정을 기본값으로"),
-          h("span", { class: "d" }, "방송 구성과 시간표는 그대로 둡니다."),
         ),
         h("span"),
       ),

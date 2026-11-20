@@ -26,10 +26,12 @@ def build_week(
     config: Config,
     start: date,
     now: datetime,
-    results: dict,
     live: tuple[date, str] | None,
 ) -> dict:
-    """회차(행) × 요일(열) 표. 칸 상태: scheduled, next, done, failed, missed, off, live, none."""
+    """회차(행) × 요일(열) 표. 칸 상태: scheduled, next, past, off, live, none.
+
+    방송 기록을 남기지 않으므로 지난 회차는 방송 여부와 관계없이 past로 표시한다.
+    """
     start = week_start(start)
     weekdays = visible_weekdays(config)
     dates = [start + timedelta(days=i) for i in weekdays]
@@ -68,7 +70,7 @@ def build_week(
                     program_id=occ.program_id,
                     program_name=occ_program.name if occ_program else "",
                     summary=occ_program.summary() if occ_program else "",
-                    status=_cell_status(occ, now, results, live, next_key),
+                    status=_cell_status(occ, now, live, next_key),
                 )
             cells.append(cell)
         rows.append(
@@ -81,18 +83,13 @@ def build_week(
     return {"start": start.isoformat(), "days": days, "rows": rows}
 
 
-def _cell_status(occ, now, results, live, next_key) -> str:
+def _cell_status(occ, now, live, next_key) -> str:
     if live == occ.key:
         return "live"
     if occ.skipped:
         return "off"
-    result = results.get(occ.key)
-    if result in ("done", "stopped"):
-        return "done"
-    if result == "failed":
-        return "failed"
     if occ.at <= now:
-        return "missed"
+        return "past"
     return "next" if next_key == occ.key else "scheduled"
 
 
