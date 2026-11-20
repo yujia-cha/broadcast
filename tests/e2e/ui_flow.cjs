@@ -265,6 +265,13 @@ async function main() {
       await page.waitForSelector(".banner >> text=자동 방송이 꺼져 있습니다");
       await page.click(".banner >> text=켜기");
       await page.waitForSelector(".banner >> text=자동 방송이 꺼져 있습니다", { state: "detached" });
+      // 빠르게 두 번 누르면 두 번 다 반영되어 원래(켜짐)로 돌아온다
+      await page.click("#auto-switch");
+      await page.click("#auto-switch");
+      await page.waitForFunction(() => fetch("/api/status").then((r) => r.json()).then((j) => j.auto_broadcast === true));
+      await page.waitForTimeout(600);
+      const server = await page.evaluate(() => fetch("/api/status").then((r) => r.json()).then((j) => j.auto_broadcast));
+      if (server !== true || (await page.getAttribute("#auto-switch", "aria-checked")) !== "true") throw new Error("두 번 누른 결과가 맞지 않습니다");
     });
 
     await step("특정 날짜: 쉬는 날만 고르면 다음으로 못 감", async () => {

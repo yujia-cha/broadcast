@@ -79,7 +79,8 @@ function renderChrome(status) {
   pill.hidden = !onAir;
   if (onAir) document.getElementById("livepill-text").textContent = `방송 중 · ${runner.name}`;
 
-  if (!autoBusy) document.getElementById("auto-switch").setAttribute("aria-checked", String(status.auto_broadcast));
+  if (autoWanted !== null) status.auto_broadcast = autoWanted; // 요청 중에는 서버의 이전 값으로 되돌리지 않는다
+  document.getElementById("auto-switch").setAttribute("aria-checked", String(status.auto_broadcast));
 
   const btn = document.getElementById("update-btn");
   const upd = status.update;
@@ -125,29 +126,30 @@ function renderBanners(status) {
   el.replaceChildren(...items);
 }
 
-let autoBusy = false;
-async function toggleAuto() {
-  if (autoBusy || !ctx.status) return; // 요청 중에 또 누르면 무시(이전 상태로 다음 값을 계산하지 않게)
-  autoBusy = true;
-  const sw = document.getElementById("auto-switch");
+// 자동 방송 켜기·끄기: 누르자마자 화면을 바꾸고, 요청은 누른 순서대로 보낸다(요청 중에 누른 것도 버리지 않는다)
+let autoWanted = null;
+let autoPending = 0;
+let autoChain = Promise.resolve();
+function toggleAuto() {
+  if (!ctx.status) return;
   const before = ctx.status.auto_broadcast;
   const next = !before;
-  ctx.status.auto_broadcast = next; // 누르자마자 모양을 바꾼다
-  sw.setAttribute("aria-checked", String(next));
-  sw.setAttribute("aria-busy", "true");
+  autoWanted = next;
+  autoPending += 1;
+  ctx.status.auto_broadcast = next;
+  document.getElementById("auto-switch").setAttribute("aria-checked", String(next));
   renderBanners(ctx.status);
-  try {
-    await patch("/api/settings", { auto_broadcast: next });
-    toast(next ? "자동 방송을 켰습니다." : "자동 방송을 껐습니다. 예약한 방송이 나가지 않습니다.");
-  } catch (err) {
-    ctx.status.auto_broadcast = before;
-    sw.setAttribute("aria-checked", String(before));
-    renderBanners(ctx.status);
-    toastError(err);
-  } finally {
-    autoBusy = false;
-    sw.removeAttribute("aria-busy");
-  }
+  autoChain = autoChain
+    .then(() => patch("/api/settings", { auto_broadcast: next }))
+    .then(() => toast(next ? "자동 방송을 켰습니다." : "자동 방송을 껐습니다. 예약한 방송이 나가지 않습니다."))
+    .catch((err) => {
+      autoWanted = before;
+      ctx.status.auto_broadcast = before;
+      document.getElementById("auto-switch").setAttribute("aria-checked", String(before));
+      renderBanners(ctx.status);
+      toastError(err);
+    })
+    .finally(() => { autoPending -= 1; if (!autoPending) autoWanted = null; });
 }
 
 // 업데이트 대화상자 ----------------------------------------------------------------
