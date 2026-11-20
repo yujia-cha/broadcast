@@ -109,4 +109,9 @@ git push origin v0.1.0
 
 ## 라이선스
 
-- 글꼴: [Pretendard](https://github.com/orioncactus/pretendard), SIL Open Font License 1.1 (`src/jeongsi/static/fonts/Pretendard-LICENSE.txt`)
+이 프로젝트의 코드는 [0BSD](LICENSE)입니다. 누구나 조건 없이 사용·수정·배포·판매할 수 있고, 저작권 표시도 남기지 않아도 됩니다.
+
+함께 들어 있거나 exe에 묶이는 다른 프로젝트는 각자의 라이선스를 따릅니다.
+
+- 글꼴 [Pretendard](https://github.com/orioncactus/pretendard): SIL Open Font License 1.1 (`src/jeongsi/static/fonts/Pretendard-LICENSE.txt`)
+- 의존성: FastAPI·pydantic·comtypes·pycaw·miniaudio(MIT), uvicorn·psutil·pywebview(BSD), Pillow(MIT-CMU), pystray(LGPL-3.0) 등
