@@ -1,10 +1,7 @@
 import json
-from datetime import date, datetime
-
 import pytest
 from pydantic import ValidationError
 
-from jeongsi.history import History, HistoryEntry
 from jeongsi.models import Slot
 from jeongsi.storage import ConfigError, ConfigStore
 
@@ -65,28 +62,3 @@ def test_newer_schema_is_refused(tmp_path):
     path.write_text(json.dumps({"schema_version": 99}), encoding="utf-8")
     with pytest.raises(ConfigError, match="새 버전"):
         ConfigStore(path)
-
-
-def _entry(result="done", day=date(2026, 11, 20), slot="lunch"):
-    now = datetime(2026, 11, 20, 12, 0)
-    return HistoryEntry(kind="scheduled", name="점심", slot_id=slot, date=day, started_at=now, ended_at=now, result=result)
-
-
-def test_history_recent_is_newest_first(tmp_path):
-    history = History(tmp_path / "history.jsonl")
-    history.append(_entry(slot="morning"))
-    history.append(_entry(slot="lunch"))
-    assert [e.slot_id for e in History(tmp_path / "history.jsonl").recent()] == ["lunch", "morning"]
-
-
-def test_history_results_by_occurrence_keeps_last(tmp_path):
-    history = History(tmp_path / "history.jsonl")
-    history.append(_entry("failed"))
-    history.append(_entry("done"))
-    assert history.results_by_occurrence()[(date(2026, 11, 20), "lunch")] == "done"
-
-
-def test_history_skips_corrupt_lines(tmp_path):
-    path = tmp_path / "history.jsonl"
-    path.write_text("not json\n" + _entry().model_dump_json() + "\n", encoding="utf-8")
-    assert len(History(path).recent()) == 1

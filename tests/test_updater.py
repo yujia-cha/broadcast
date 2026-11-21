@@ -15,6 +15,7 @@ from jeongsi.updater import (
     is_newer,
     old_exe_path,
     parse_version,
+    relaunch_env,
 )
 
 EXE = b"new exe bytes" * 100
@@ -167,3 +168,100 @@ def test_apply_update_rolls_back_when_new_file_missing(tmp_path):
     with pytest.raises(UpdateError):
         apply_update(tmp_path / "missing.exe", exe, launch=lambda args: None)
     assert exe.read_bytes() == b"old"
+
+
+def test_mark_error_sets_state_and_message():
+    updater = Updater("1.0.0", opener=opener({}))
+    updater.mark_error("쓸 수 없음")
+    assert updater.status() == {"state": "error", "message": "쓸 수 없음", "current": "1.0.0"}
+
+
+def test_local_feed_is_used_and_allows_local_downloads():
+    feed = "http://127.0.0.1:9999/latest.json"
+    data = json.loads(release_json())
+    for asset in data["assets"]:
+        asset["browser_download_url"] = "http://127.0.0.1:9999/" + asset["name"]
+    updater = Updater("1.0.0", opener=opener({feed: json.dumps(data).encode()}), feed_url=feed)
+    assert updater.check().asset_url == "http://127.0.0.1:9999/" + ASSET_NAME
+
+
+def test_feed_override_rejects_remote_hosts():
+    with pytest.raises(ValueError):
+        Updater("1.0.0", feed_url="https://evil.example/latest.json")
+
+
+def test_apply_update_passes_extra_args(tmp_path):
+    exe = tmp_path / ASSET_NAME
+    exe.write_bytes(b"old")
+    new = tmp_path / "new.exe"
+    new.write_bytes(b"new")
+    launched = []
+    apply_update(new, exe, launch=launched.append, extra_args=["--port", "5000"])
+    assert launched == [[str(exe), "--port", "5000", "--updated"]]
+
+
+def test_cleanup_old_exe_gives_up_quietly(tmp_path, monkeypatch):
+    exe = tmp_path / ASSET_NAME
+    old = old_exe_path(exe)
+    old.write_bytes(b"old")
+    calls = []
+
+    def locked(self, missing_ok=False):
+        calls.append(1)
+        raise PermissionError("잠김")
+
+    monkeypatch.setattr(type(old), "unlink", locked)
+    cleanup_old_exe(exe, attempts=3, delay=0)
+    assert len(calls) == 3
+
+
+def test_launch_failure_rolls_back_to_old_version(tmp_path):
+    exe = tmp_path / ASSET_NAME
+    exe.write_bytes(b"old")
+    new = tmp_path / "new.exe"
+    new.write_bytes(b"new")
+
+    def blocked(args):
+        raise PermissionError("백신이 막음")
+
+    with pytest.raises(UpdateError, match="되돌렸습니다"):
+        apply_update(new, exe, launch=blocked)
+    assert exe.read_bytes() == b"old"
+    assert not old_exe_path(exe).exists()
+
+
+def test_relaunch_env_drops_pyinstaller_state_and_keeps_the_rest():
+    # Arrange: 이전 onefile exe가 자식에게 넘기는 값과 일반 값
+    environ = {
+        "_PYI_APPLICATION_HOME_DIR": r"C:\Temp\_MEI123",
+        "_PYI_ARCHIVE_FILE": r"C:\app\JeongsiBroadcast.old.exe",
+        "_PYI_PARENT_PROCESS_LEVEL": "1",
+        "_MEIPASS2": r"C:\Temp\_MEI123",
+        "PATH": r"C:\Windows",
+        "JEONGSI_UPDATE_FEED": "http://127.0.0.1:1/latest.json",
+    }
+
+    # Act
+    env = relaunch_env(environ)
+
+    # Assert
+    assert env == {
+        "PATH": r"C:\Windows",
+        "JEONGSI_UPDATE_FEED": "http://127.0.0.1:1/latest.json",
+        "PYINSTALLER_RESET_ENVIRONMENT": "1",
+    }
+
+
+def test_relaunch_env_with_empty_environment_still_resets():
+    assert relaunch_env({}) == {"PYINSTALLER_RESET_ENVIRONMENT": "1"}
+
+
+def test_check_while_downloading_keeps_state(tmp_path):
+    # Arrange: 받는 중
+    up = Updater("0.1.0", opener=lambda url, timeout=15.0: (_ for _ in ()).throw(AssertionError("네트워크를 쓰면 안 됨")))
+    up._release = ReleaseInfo("9.0.0", "", "", "", "a", "b")
+    up.mark_downloading()
+    # Act
+    result = up.check()
+    # Assert: 상태가 available로 돌아가면 중복 적용 막기가 풀린다
+    assert result.version == "9.0.0" and up.status()["state"] == "downloading"

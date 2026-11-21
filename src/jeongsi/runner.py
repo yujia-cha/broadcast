@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Literal
 
 from .audio.base import AudioBackend
-from .history import History, HistoryEntry
 from .models import Program, Settings, Step
 from .storage import atomic_write_text
 
@@ -41,6 +40,10 @@ class Job:
     program: Program
     slot_id: str | None = None
     date: date | None = None
+    # 재생 직전에 아직 유효한지 확인(예약 방송: 쉬기·자동 방송 끄기가 그새 적용됐는지)
+    check: Callable[[], bool] | None = field(default=None, compare=False, repr=False)
+    # 미리듣기를 이 음량(0~100)으로 들려준다(설정 화면의 음량 시험). 끝나면 원래 음량으로 돌린다
+    test_volume: int | None = None
 
     @property
     def ducks(self) -> bool:
@@ -93,7 +96,6 @@ class Runner:
         self,
         audio: AudioBackend,
         settings: Callable[[], Settings],
-        history: History,
         media_dir: Path,
         work_dir: Path,
         now: Callable[[], datetime] = datetime.now,
@@ -101,7 +103,7 @@ class Runner:
     ):
         self._audio = audio
         self._settings = settings
-        self._history = history
+        self._last: dict | None = None  # 마지막 결과(메모리에만, 실패 알림용). 방송 기록은 남기지 않는다.
         self._media_dir = media_dir
         self._work_dir = work_dir
         self._now = now
@@ -113,6 +115,7 @@ class Runner:
         self._thread: threading.Thread | None = None
         self._status: dict = {"state": "idle"}
         self._restore_path = work_dir / "restore.json"
+        self._closing = False
 
     # 공개 API --------------------------------------------------------------
     def start(self) -> None:
@@ -123,14 +126,34 @@ class Runner:
         self._thread.start()
 
     def shutdown(self, timeout: float = 10.0) -> None:
+        """대기 중인 방송은 버리고 지금 방송을 끈 뒤 소리 상태를 복원하고 끝낸다."""
+        self._closing = True
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
         self.stop_current()
         self._queue.put(None)
         if self._thread:
             self._thread.join(timeout)
 
     def enqueue(self, job: Job) -> None:
+        if self._closing:
+            return
         if job.kind == "preview" and self.busy:
             raise RunnerBusy("방송 중에는 미리듣기를 할 수 없습니다.")
+        if job.kind == "manual":
+            # 동시에 여러 번 눌러도 하나만 받는다(확인과 넣기를 한 번에)
+            with self._lock:
+                playing = self._status["state"] != "idle" and self._status.get("kind") != "preview"
+                if playing or not self._queue.empty():
+                    raise RunnerBusy("이미 방송 중이거나 곧 나갈 방송이 있습니다.")
+                self._queue.put(job)
+            self.stop_current(kind="preview")
+            return
+        if job.kind != "preview":
+            self.stop_current(kind="preview")  # 방송이 미리듣기보다 우선
         self._queue.put(job)
 
     @property
@@ -143,10 +166,12 @@ class Runner:
         with self._lock:
             return self._status["state"] != "idle" and self._status.get("kind") != "preview"
 
-    def stop_current(self) -> bool:
-        """지금 방송(또는 미리듣기)을 끈다. 끌 것이 없으면 False."""
+    def stop_current(self, kind: str | None = None) -> bool:
+        """지금 방송(또는 미리듣기)을 끈다. kind를 주면 그 종류일 때만 끈다. 끌 것이 없으면 False."""
         with self._lock:
             if self._status["state"] == "idle":
+                return False
+            if kind is not None and self._status.get("kind") != kind:
                 return False
             self._stop_requested = True
         self._interrupt.set()
@@ -160,9 +185,15 @@ class Runner:
         self._interrupt.set()
         return True
 
+    @property
+    def last_result(self) -> dict | None:
+        with self._lock:
+            return dict(self._last) if self._last else None
+
     def status(self) -> dict:
         with self._lock:
             snap = dict(self._status)
+            snap["last"] = dict(self._last) if self._last else None
         if snap.get("play_started") is not None:
             snap["play_elapsed"] = round(_time.monotonic() - snap.pop("play_started"), 1)
         else:
@@ -181,7 +212,7 @@ class Runner:
                 muted=list(raw.get("muted", [])),
                 volume=(float(volume[0]), bool(volume[1])) if volume else None,
             )
-        except (OSError, ValueError, TypeError, IndexError):
+        except (OSError, ValueError, TypeError, IndexError, AttributeError):
             log.exception("restore.json을 읽지 못했습니다")
             self._restore_path.unlink(missing_ok=True)
             return
@@ -194,7 +225,12 @@ class Runner:
             job = self._queue.get()
             if job is None:
                 return
+            if self._closing:
+                continue
             try:
+                if job.check is not None and not job.check():
+                    log.info("대기 중에 취소된 방송을 건너뜁니다: %s", job.name)
+                    continue
                 self._execute(job)
             except Exception:  # 실행기 스레드는 죽지 않는다
                 log.exception("방송 실행 중 예상치 못한 오류")
@@ -217,17 +253,18 @@ class Runner:
                 "slot_id": job.slot_id,
                 "date": job.date.isoformat() if job.date else None,
                 "program_id": job.program.id,
-                "plays": [{"label": u.label, "seconds": round(u.seconds, 1)} for u in units],
+                "plays": [{"label": u.label, "kind": u.step.kind, "seconds": round(u.seconds, 1)} for u in units],
                 "index": 0,
                 "play_started": None,
             }
         self._on_change()
-        started_at = self._now()
         result, error = "done", ""
         restore = RestoreState()
         try:
             if job.ducks:
                 self._duck(restore, settings)
+            elif job.test_volume is not None:
+                self._duck(restore, settings.model_copy(update={"pause_media": False, "mute_others": False, "set_volume": True, "volume": job.test_volume}))
             self._set_status(state="playing")
             self._play_units(units, settings)
             if self._stop_requested:
@@ -237,23 +274,17 @@ class Runner:
             result, error = "failed", str(exc)[:200]
         finally:
             self._set_status(state="restoring", play_started=None)
-            if job.ducks:
+            if job.ducks or job.test_volume is not None:
                 self._restore(restore)
             with self._lock:
                 self._status = {"state": "idle"}
-            if job.kind != "preview":
-                self._history.append(
-                    HistoryEntry(
-                        kind=job.kind,  # type: ignore[arg-type]
-                        name=job.name,
-                        slot_id=job.slot_id,
-                        date=job.date,
-                        started_at=started_at,
-                        ended_at=self._now(),
-                        result=result,  # type: ignore[arg-type]
-                        error=error,
-                    )
-                )
+                self._last = {
+                    "kind": job.kind,
+                    "name": job.name,
+                    "result": result,
+                    "error": error,
+                    "finished_at": self._now().isoformat(timespec="seconds"),
+                }
             self._on_change()
 
     def _play_units(self, units: list[PlayUnit], settings: Settings) -> None:
@@ -297,16 +328,26 @@ class Runner:
         return path
 
     def _duck(self, state: RestoreState, settings: Settings) -> None:
+        """다른 소리 처리. 하나가 실패해도 방송은 내보낸다(최선 노력)."""
         if settings.pause_media:
-            state.paused = self._audio.media.pause_playing()
-            self._save_restore(state)
+            try:
+                state.paused = self._audio.media.pause_playing()
+                self._save_restore(state)
+            except Exception:
+                log.exception("미디어 일시정지 실패, 계속 방송합니다")
         if settings.mute_others:
-            state.muted = self._audio.muter.mute_others()
-            self._save_restore(state)
+            try:
+                state.muted = self._audio.muter.mute_others()
+                self._save_restore(state)
+            except Exception:
+                log.exception("다른 앱 음소거 실패, 계속 방송합니다")
         if settings.set_volume:
-            state.volume = self._audio.volume.get()
-            self._save_restore(state)  # 바꾸기 전에 기록
-            self._audio.volume.set(settings.volume / 100, False)
+            try:
+                state.volume = self._audio.volume.get()
+                self._save_restore(state)  # 바꾸기 전에 기록
+                self._audio.volume.set(settings.volume / 100, False)
+            except Exception:
+                log.exception("방송 음량 적용 실패, 계속 방송합니다")
 
     def _restore(self, state: RestoreState) -> None:
         steps: list[tuple[str, Callable[[], None]]] = []

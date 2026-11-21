@@ -94,3 +94,22 @@ def test_program_summary_uses_labels_and_repeat():
 def test_media_display_name_strips_storage_prefix():
     assert media_display_name("a1b2c3d4-chime.wav") == "chime.wav"
     assert media_display_name("plain.wav") == "plain.wav"
+
+
+@pytest.mark.parametrize("name", ["D:x.mp3", "C:..\\x.wav", "NUL.wav", "con.mp3", "COM1.ogg"])
+def test_media_names_cannot_escape_or_use_device_names(name):
+    from jeongsi.models import is_safe_media_name
+
+    assert is_safe_media_name(name) is False
+
+
+def test_slot_end_before_start_is_rejected():
+    with pytest.raises(ValidationError, match="끝나는 날"):
+        Slot(name="회차", time="09:00", weekdays=[0], program_id="p1", start_date=date(2026, 12, 2), end_date=date(2026, 12, 1))
+
+
+def test_slot_needs_weekdays_or_dates():
+    with pytest.raises(ValidationError, match="요일이나 날짜"):
+        Slot(name="회차", time="09:00", weekdays=[], program_id="p1")
+    slot = Slot(name="회차", time="09:00", dates=[date(2026, 12, 2), date(2026, 12, 1), date(2026, 12, 2)], program_id="p1")
+    assert slot.dates == [date(2026, 12, 1), date(2026, 12, 2)]

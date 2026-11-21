@@ -1,0 +1,78 @@
+name: Package
+
+# Windows exe를 빌드하고 배포 스모크 테스트(실행·Windows 오디오·자동 실행·업데이트 교체)를 한다.
+# CI와 Release가 같은 빌드를 재사용한다.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "앱 버전(비우면 소스의 __version__)"
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "앱 버전(비우면 소스의 __version__)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 앱 버전 반영
+        if: inputs.version != ''
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          $version = $env:VERSION.TrimStart("v")
+          if ($version -notmatch '^\d+(\.\d+)*$') { throw "버전은 v1.2.0 형식이어야 합니다: $env:VERSION" }
+          $path = "src/jeongsi/__init__.py"
+          (Get-Content $path -Raw -Encoding utf8) -replace '__version__ = ".*"', "__version__ = `"$version`"" | Set-Content $path -NoNewline -Encoding utf8
+
+      - name: 의존성 설치
+        run: pip install ".[dev,windows]" "pyinstaller==6.11.1"
+
+      - name: 아이콘 만들기
+        run: python tools/make_icon.py build/icon.ico
+
+      - name: exe 빌드
+        run: >
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name JeongsiBroadcast
+          --icon build/icon.ico
+          --collect-data jeongsi
+          --collect-submodules uvicorn
+          --collect-submodules winrt
+          --collect-submodules pycaw
+          --hidden-import pystray._win32
+          tools/launcher.py
+
+      - name: 배포 스모크 테스트
+        env:
+          PYTHONUTF8: "1"
+        run: python tools/smoke_exe.py dist/JeongsiBroadcast.exe
+
+      - name: SHA-256 파일 만들기
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/JeongsiBroadcast.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  JeongsiBroadcast.exe" | Out-File -FilePath dist/JeongsiBroadcast.exe.sha256 -Encoding ascii -NoNewline
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JeongsiBroadcast-windows
+          path: |
+            dist/JeongsiBroadcast.exe
+            dist/JeongsiBroadcast.exe.sha256
+          retention-days: 14

@@ -33,9 +33,14 @@ def _check_hhmm(value: str) -> str:
     return value
 
 
+_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
 def is_safe_media_name(name: str) -> bool:
-    """media 폴더 안의 파일 이름만 허용한다(경로 조작 방지)."""
-    return bool(name) and "/" not in name and "\\" not in name and not name.startswith(".") and ".." not in name
+    """media 폴더 안의 파일 이름만 허용한다(경로 조작·다른 드라이브·장치 이름 방지)."""
+    if not name or name.startswith(".") or ".." in name or any(c in name for c in '/\\:'):
+        return False
+    return name.split(".")[0].upper() not in _RESERVED
 
 
 class _Model(BaseModel):
@@ -101,14 +106,17 @@ class Program(_Model):
 
 
 class Slot(_Model):
-    """주간 일정의 회차: 정해진 요일·시각에 방송 구성 하나를 내보낸다."""
+    """회차: 매주 정한 요일, 또는 고른 특정 날짜들의 정해진 시각에 방송 구성 하나를 내보낸다."""
 
     id: str = Field(default_factory=new_id)
     name: str = Field(min_length=1, max_length=40)
     time: str
-    weekdays: list[int] = Field(min_length=1, max_length=7)
+    weekdays: list[int] = Field(default_factory=list, max_length=7)  # 매주 반복할 요일
+    dates: list[date] = Field(default_factory=list, max_length=366)  # 특정 날짜(있으면 요일 대신 이 날들만)
     program_id: str
     enabled: bool = True
+    start_date: date | None = None  # 이 날부터 방송(없으면 바로)
+    end_date: date | None = None  # 이 날까지 방송(없으면 계속)
 
     @field_validator("time")
     @classmethod
@@ -129,6 +137,32 @@ class Slot(_Model):
         if any(day < 0 or day > 6 for day in value):
             raise ValueError("요일 값이 올바르지 않습니다.")
         return sorted(set(value))
+
+    @field_validator("dates")
+    @classmethod
+    def _sort_dates(cls, value: list[date]) -> list[date]:
+        return sorted(set(value))
+
+    @model_validator(mode="after")
+    def _check_period(self) -> Slot:
+        if not self.weekdays and not self.dates:
+            raise ValueError("요일이나 날짜를 하나 이상 고르세요.")
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("끝나는 날이 시작하는 날보다 빠릅니다.")
+        return self
+
+    def active_on(self, day: date) -> bool:
+        return (self.start_date is None or day >= self.start_date) and (self.end_date is None or day <= self.end_date)
+
+    def matches(self, day: date) -> bool:
+        """켜짐 여부와 관계없이 그 날이 이 회차의 날인지(요일 또는 날짜·기간)."""
+        if not self.active_on(day):
+            return False
+        return day in self.dates if self.dates else day.weekday() in self.weekdays
+
+    def occurs_on(self, day: date) -> bool:
+        """그 날 방송하는 회차인지(켜짐·요일 또는 날짜·기간)."""
+        return self.enabled and self.matches(day)
 
 
 class DayOff(_Model):
@@ -158,6 +192,8 @@ class Override(_Model):
     action: Literal["skip", "change"]
     time: str | None = None
     program_id: str | None = None
+    # 쉬는 날에도 이 회차만 내보낸다('이번만 켜기'). 없으면 쉬는 날이 이긴다
+    force: bool = False
 
     @field_validator("time")
     @classmethod
@@ -200,7 +236,7 @@ class Config(_Model):
     def _check_references(self) -> Config:
         program_ids = {p.id for p in self.programs}
         slot_ids = {s.id for s in self.slots}
-        for group, ids in (("방송 구성", [p.id for p in self.programs]), ("회차", [s.id for s in self.slots])):
+        for group, ids in (("방송 구성", [p.id for p in self.programs]), ("회차", [s.id for s in self.slots]), ("쉬는 날", [d.id for d in self.days_off])):
             if len(ids) != len(set(ids)):
                 raise ValueError(f"{group} id가 중복되었습니다.")
         for slot in self.slots:

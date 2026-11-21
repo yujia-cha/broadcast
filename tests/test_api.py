@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from jeongsi.app import NullShell, Services, create_app
 from jeongsi.audio.fake import FakePlayer, fake_backend
-from jeongsi.history import History
 from jeongsi.media import MediaLibrary
 from jeongsi.runner import Runner
 from jeongsi.storage import ConfigStore
@@ -45,12 +44,11 @@ def env(tmp_path):
     media = MediaLibrary(tmp_path / "media", backend.player.duration)
     (tmp_path / "media" / "a1b2c3d4-chime.wav").write_bytes(wav_bytes())
     store.replace(make_config())
-    history = History(tmp_path / "history.jsonl")
-    runner = Runner(backend, lambda: store.config.settings, history, media.directory, tmp_path / "work", now=lambda: NOW)
+    runner = Runner(backend, lambda: store.config.settings, media.directory, tmp_path / "work", now=lambda: NOW)
     runner.start()
     shell = RecordingShell()
     services = Services(
-        store=store, history=history, runner=runner, updater=Updater("0.1.0", opener=_offline), audio=backend,
+        store=store, runner=runner, updater=Updater("0.1.0", opener=_offline), audio=backend,
         media=media, data_dir=tmp_path, shell=shell, now=lambda: NOW, allowed_hosts={"testserver"},
     )
     client = TestClient(create_app(services))
@@ -85,7 +83,7 @@ def test_week_marks_past_as_missed_and_next(env):
     lunch = next(r for r in week["rows"] if r["slot"]["id"] == "lunch")
     friday = lunch["cells"][4]
     assert friday["status"] == "next"
-    assert lunch["cells"][0]["status"] == "missed"
+    assert lunch["cells"][0]["status"] == "past"
     assert [d["label"] for d in week["days"]] == ["월", "화", "수", "목", "금"]
 
 
@@ -193,6 +191,26 @@ def test_upload_sanitizes_name(env):
     assert (services.media.directory / name).exists()
 
 
+def test_upload_same_file_twice_reuses_it(env):
+    # Arrange
+    client, services, _ = env
+    data = wav_bytes()
+    first = client.post("/api/media", files={"file": ("bell.wav", data, "audio/wav")}, headers=HEADERS).json()["name"]
+    # Act
+    second = client.post("/api/media", files={"file": ("bell.wav", data, "audio/wav")}, headers=HEADERS)
+    # Assert
+    assert second.status_code == 201 and second.json()["name"] == first
+    assert len(list(services.media.directory.glob("*-bell.wav"))) == 1
+
+
+def test_upload_same_name_different_content_is_kept_separately(env):
+    client, services, _ = env
+    client.post("/api/media", files={"file": ("bell.wav", wav_bytes(0.5), "audio/wav")}, headers=HEADERS)
+    client.post("/api/media", files={"file": ("bell.wav", wav_bytes(0.25), "audio/wav")}, headers=HEADERS)
+    assert len(list(services.media.directory.glob("*-bell.wav"))) == 2
+    assert not list(services.media.directory.glob("*.part"))
+
+
 def test_upload_rejects_unplayable_file(env):
     client, _, _ = env
     res = client.post("/api/media", files={"file": ("broken.wav", b"not audio", "audio/wav")}, headers=HEADERS)
@@ -235,3 +253,324 @@ def test_update_apply_without_release_is_refused(env):
 def test_update_check_offline_returns_502(env):
     client, _, _ = env
     assert client.post("/api/update/check", headers=HEADERS).status_code == 502
+
+
+def test_preview_whole_program(env):
+    client, _, backend = env
+    body = {"name": "", "steps": [{"kind": "audio", "file": "a1b2c3d4-chime.wav"}, {"kind": "tts", "text": "안내", "repeat": 2}]}
+    assert client.post("/api/preview", json=body, headers=HEADERS).status_code == 202
+    assert backend.player.started.wait(2)
+    assert backend.media.calls == []  # 미리듣기는 다른 소리를 건드리지 않는다
+    client.post("/api/broadcast/stop", headers=HEADERS)
+
+
+def test_preview_program_with_missing_file_is_rejected(env):
+    client, _, _ = env
+    body = {"steps": [{"kind": "audio", "file": "a1b2c3d4-gone.wav"}]}
+    res = client.post("/api/preview", json=body, headers=HEADERS)
+    assert res.status_code == 422 and "찾을 수 없습니다" in res.json()["error"]
+
+
+def test_history_api_is_gone(env):
+    client, _, _ = env
+    assert client.get("/api/history").status_code == 404
+
+
+def test_failure_is_reported_in_status_not_stored(env, tmp_path):
+    client, services, backend = env
+    backend.player.block = False
+    (services.media.directory / "a1b2c3d4-chime.wav").unlink()
+    client.post("/api/broadcast", json={"program_id": "p1"}, headers=HEADERS)
+    import time
+    for _ in range(100):
+        last = client.get("/api/status").json()["runner"]["last"]
+        if last:
+            break
+        time.sleep(0.02)
+    assert last["result"] == "failed" and "소리 파일이 없습니다" in last["error"]
+    assert not list(tmp_path.rglob("*history*"))
+
+
+def test_import_rejects_newer_schema(env):
+    client, services, _ = env
+    data = make_config().model_dump(mode="json")
+    data["schema_version"] = 99
+    res = client.post("/api/import", json=data, headers=HEADERS)
+    assert res.status_code == 422 and "새 버전" in res.json()["error"]
+
+
+def test_reset_settings_keeps_auto_broadcast(env):
+    client, services, _ = env
+    client.patch("/api/settings", json={"auto_broadcast": False, "volume": 30}, headers=HEADERS)
+    client.post("/api/settings/reset", headers=HEADERS)
+    settings = services.store.config.settings
+    assert settings.auto_broadcast is False and settings.volume == 70
+
+
+def test_stop_preview_does_not_stop_broadcast(env):
+    client, _, backend = env
+    client.post("/api/broadcast", json={"program_id": "p1"}, headers=HEADERS)
+    assert backend.player.started.wait(2)
+    assert client.post("/api/broadcast/stop", json={"kind": "preview"}, headers=HEADERS).json()["stopped"] is False
+    assert client.post("/api/broadcast/stop", headers=HEADERS).json()["stopped"] is True
+
+
+def test_update_apply_twice_is_refused(env):
+    client, services, _ = env
+    services.updater._release = __import__("jeongsi.updater", fromlist=["ReleaseInfo"]).ReleaseInfo("9.0.0", "", "", "", "a", "b")
+    services.updater.mark_downloading()
+    res = client.post("/api/update/apply", headers=HEADERS)
+    assert res.status_code == 409 and "진행" in res.json()["error"]
+
+
+def test_create_broadcast_makes_program_and_slot(env):
+    # Arrange
+    client, services, _ = env
+    body = {
+        "name": "하교 음악",
+        "steps": [{"kind": "tts", "text": "하교 시간입니다.", "repeat": 2}, {"kind": "audio", "file": "a1b2c3d4-chime.wav"}],
+        "time": "16:30", "weekdays": [0, 1, 2, 3, 4], "start_date": "2026-11-23",
+    }
+    # Act
+    res = client.post("/api/broadcasts", json=body, headers=HEADERS)
+    # Assert
+    assert res.status_code == 201
+    data = res.json()
+    assert data["next"] == {"date": "2026-11-23", "time": "16:30"}
+    cfg = services.store.config
+    slot = cfg.slot(data["slot"]["id"])
+    assert slot.program_id == data["program"]["id"] and cfg.program(slot.program_id).steps[0].repeat == 2
+
+
+@pytest.mark.parametrize("bad", [
+    {"time": "25:00"},
+    {"weekdays": []},
+    {"steps": []},
+    {"name": " "},
+    {"end_date": "2026-11-01", "start_date": "2026-11-30"},
+])
+def test_create_broadcast_is_all_or_nothing(env, bad):
+    client, services, _ = env
+    body = {"name": "새 방송", "steps": [{"kind": "tts", "text": "안내"}], "time": "09:00", "weekdays": [0], **bad}
+    before = (len(services.store.config.programs), len(services.store.config.slots))
+    res = client.post("/api/broadcasts", json=body, headers=HEADERS)
+    assert res.status_code == 422
+    assert (len(services.store.config.programs), len(services.store.config.slots)) == before
+
+
+def test_create_broadcast_on_specific_dates(env):
+    client, services, _ = env
+    body = {"name": "행사 안내", "steps": [{"kind": "tts", "text": "행사가 곧 시작합니다."}], "time": "10:00", "dates": ["2026-11-21", "2026-11-28"]}
+    res = client.post("/api/broadcasts", json=body, headers=HEADERS)
+    assert res.status_code == 201
+    assert res.json()["next"] == {"date": "2026-11-21", "time": "10:00"}
+    week = client.get("/api/week?start=2026-11-16").json()
+    assert [d["label"] for d in week["days"]][-1] == "토"
+
+
+def test_check_broadcast_marks_past_and_day_off_dates(env):
+    # Arrange: NOW = 2026-11-20 11:18, 11/25을 쉬는 날로
+    client, _, _ = env
+    client.post("/api/days-off", json={"start": "2026-11-25", "end": "2026-11-25", "memo": "행사"}, headers=HEADERS)
+    body = {"time": "09:00", "dates": ["2026-11-25", "2026-11-20", "2026-11-21"]}
+    # Act
+    res = client.post("/api/broadcasts/check", json=body, headers=HEADERS)
+    # Assert
+    assert res.status_code == 200
+    assert res.json()["dates"] == [
+        {"date": "2026-11-20", "state": "past"},
+        {"date": "2026-11-21", "state": "ok"},
+        {"date": "2026-11-25", "state": "off"},
+    ]
+
+
+def test_check_broadcast_today_later_time_is_ok(env):
+    client, _, _ = env
+    res = client.post("/api/broadcasts/check", json={"time": "11:19", "dates": ["2026-11-20"]}, headers=HEADERS)
+    assert res.json()["dates"] == [{"date": "2026-11-20", "state": "ok"}]
+
+
+def test_create_broadcast_refuses_dates_that_never_air(env):
+    # Arrange: 오늘 지난 시각 + 쉬는 날만 고름
+    client, services, _ = env
+    client.post("/api/days-off", json={"start": "2026-11-25", "end": "2026-11-25"}, headers=HEADERS)
+    body = {"name": "행사", "steps": [{"kind": "tts", "text": "안내"}], "time": "09:00", "dates": ["2026-11-20", "2026-11-25"]}
+    before = len(services.store.config.slots)
+    # Act
+    res = client.post("/api/broadcasts", json=body, headers=HEADERS)
+    # Assert
+    assert res.status_code == 422 and "나갈 방송이 없습니다" in res.json()["error"]
+    assert len(services.store.config.slots) == before
+
+
+def test_day_off_already_covered_is_refused(env):
+    # Arrange: 11/23~11/27 쉬는 날
+    client, services, _ = env
+    client.post("/api/days-off", json={"start": "2026-11-23", "end": "2026-11-27"}, headers=HEADERS)
+    # Act: 같은 기간, 안에 든 하루
+    same = client.post("/api/days-off", json={"start": "2026-11-23", "end": "2026-11-27"}, headers=HEADERS)
+    inside = client.post("/api/days-off", json={"start": "2026-11-25", "end": "2026-11-25"}, headers=HEADERS)
+    wider = client.post("/api/days-off", json={"start": "2026-11-27", "end": "2026-11-28"}, headers=HEADERS)
+    # Assert: 겹치면 하나로 합쳐 넓어진다
+    assert same.status_code == 409 and "이미 쉬는 날" in same.json()["error"]
+    assert inside.status_code == 409
+    assert wider.status_code == 201
+    days_off = services.store.config.days_off
+    assert [(d.start.isoformat(), d.end.isoformat()) for d in days_off] == [("2026-11-23", "2026-11-28")]
+
+
+def test_adjacent_days_off_merge_and_keep_memo(env):
+    # Arrange
+    client, services, _ = env
+    client.post("/api/days-off", json={"start": "2026-12-21", "end": "2026-12-24", "memo": "겨울 방학"}, headers=HEADERS)
+    # Act: 맞닿은 날(12/25)과 떨어진 날(12/31)
+    merged = client.post("/api/days-off", json={"start": "2026-12-25", "end": "2026-12-25"}, headers=HEADERS)
+    apart = client.post("/api/days-off", json={"start": "2026-12-31", "end": "2026-12-31"}, headers=HEADERS)
+    # Assert
+    assert merged.status_code == 201 and merged.json()["end"] == "2026-12-25" and merged.json()["memo"] == "겨울 방학"
+    assert apart.status_code == 201
+    assert sorted((d.start.isoformat(), d.end.isoformat()) for d in services.store.config.days_off) == [
+        ("2026-12-21", "2026-12-25"), ("2026-12-31", "2026-12-31")]
+
+
+def test_delete_slot_with_program_removes_its_unused_program(env):
+    # Arrange: 새 방송 만들기로 구성+회차를 함께 만든다
+    client, services, _ = env
+    body = {"name": "한 번 방송", "steps": [{"kind": "tts", "text": "안내"}], "time": "09:00", "weekdays": [0]}
+    made = client.post("/api/broadcasts", json=body, headers=HEADERS).json()
+    # Act
+    res = client.delete(f"/api/slots/{made['slot']['id']}?with_program=true", headers=HEADERS)
+    # Assert
+    assert res.status_code == 204
+    assert services.store.config.program(made["program"]["id"]) is None
+
+
+def test_delete_slot_keeps_program_used_by_another_slot(env):
+    client, services, _ = env
+    cfg = services.store.config
+    shared = cfg.slots[0].program_id
+    other = [s for s in cfg.slots if s.program_id == shared]
+    if len(other) < 2:
+        client.post("/api/slots", json={"name": "복사", "time": "10:00", "weekdays": [1], "program_id": shared}, headers=HEADERS)
+    res = client.delete(f"/api/slots/{cfg.slots[0].id}?with_program=true", headers=HEADERS)
+    assert res.status_code == 204
+    assert services.store.config.program(shared) is not None
+
+
+def test_change_of_an_already_aired_broadcast_is_refused(env):
+    # Arrange: NOW = 2026-11-20 11:18, 아침 조회(08:50)는 이미 지남
+    client, _, _ = env
+    # Act
+    res = client.put("/api/overrides", json={"date": "2026-11-20", "slot_id": "morning", "action": "change", "time": "13:00"}, headers=HEADERS)
+    # Assert: 옮기면 한 번 더 방송되므로 거절
+    assert res.status_code == 409 and "이미 지난 방송" in res.json()["error"]
+
+
+def test_change_to_a_time_already_past_is_refused(env):
+    client, _, _ = env
+    res = client.put("/api/overrides", json={"date": "2026-11-20", "slot_id": "lunch", "action": "change", "time": "11:18"}, headers=HEADERS)
+    assert res.status_code == 422 and "지난 시각" in res.json()["error"]
+
+
+def test_change_of_upcoming_broadcast_to_later_today_is_ok(env):
+    client, _, _ = env
+    res = client.put("/api/overrides", json={"date": "2026-11-20", "slot_id": "lunch", "action": "change", "time": "11:19"}, headers=HEADERS)
+    assert res.status_code == 200
+
+
+def test_skip_keeps_the_changed_time_for_restoring(env):
+    # Arrange: 점심을 12:30으로 바꾼 뒤 이번만 끈다(UI는 바꾼 시각을 함께 보낸다)
+    client, services, _ = env
+    client.put("/api/overrides", json={"date": "2026-11-23", "slot_id": "lunch", "action": "change", "time": "12:30"}, headers=HEADERS)
+    # Act
+    res = client.put("/api/overrides", json={"date": "2026-11-23", "slot_id": "lunch", "action": "skip", "time": "12:30"}, headers=HEADERS)
+    # Assert
+    assert res.status_code == 200
+    ov = services.store.config.overrides[0]
+    assert ov.action == "skip" and ov.time == "12:30"
+
+
+@pytest.mark.parametrize("raw", [[], None, {"schema_version": "2"}, {"schema_version": "x"}, {"schema_version": 0}])
+def test_import_of_malformed_file_is_422_not_500(env, raw):
+    client, _, _ = env
+    res = client.post("/api/import", json=raw, headers=HEADERS)
+    assert res.status_code == 422
+
+
+def test_import_reports_missing_sound_files_and_duplicate_day_off_ids(env):
+    client, services, _ = env
+    data = client.get("/api/export").json()
+    data["programs"][0]["steps"] = [{"kind": "audio", "file": "a1b2c3d4-missing.wav"}]
+    res = client.post("/api/import", json=data, headers=HEADERS)
+    assert res.status_code == 200 and res.json()["missing_files"] == ["a1b2c3d4-missing.wav"]
+    data["days_off"] = [{"id": "x1", "start": "2026-12-01", "end": "2026-12-01"}, {"id": "x1", "start": "2026-12-02", "end": "2026-12-02"}]
+    assert client.post("/api/import", json=data, headers=HEADERS).status_code == 422
+
+
+def test_concurrent_settings_patches_keep_both_changes(env):
+    # 두 요청이 같은 이전 값을 보고 합쳐도 서로 지우지 않아야 한다(저장 잠금 안에서 합침)
+    import threading
+
+    client, services, _ = env
+    errors = []
+
+    def patch(body):
+        r = client.patch("/api/settings", json=body, headers=HEADERS)
+        if r.status_code != 200:
+            errors.append(r.text)
+
+    threads = [threading.Thread(target=patch, args=(b,)) for b in ({"volume": 35}, {"theme": "dark"}, {"default_rate": 1.25})]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    st = services.store.config.settings
+    assert not errors and (st.volume, st.theme, st.default_rate) == (35, "dark", 1.25)
+
+
+def test_corrupt_config_shapes_start_with_empty_settings(tmp_path):
+    from jeongsi.storage import ConfigStore
+
+    for raw in ("[]", "null", '{"schema_version": "2"}'):
+        path = tmp_path / "config.json"
+        path.write_text(raw, encoding="utf-8")
+        store = ConfigStore(path)
+        assert store.config.slots == [] and store.load_warning
+
+
+def test_long_file_name_keeps_extension(env):
+    client, _, _ = env
+    res = client.post("/api/media", files={"file": ("가" * 125 + ".wav", wav_bytes(), "audio/wav")}, headers=HEADERS)
+    assert res.status_code == 201 and res.json()["name"].endswith(".wav")
+
+
+def test_far_week_is_422_not_500(env):
+    client, _, _ = env
+    assert client.get("/api/week?start=9999-12-31").status_code == 422
+
+
+def test_next_finds_a_specific_date_months_ahead(env):
+    client, services, _ = env
+    services.store.update(lambda c: setattr(c, "slots", []))
+    body = {"name": "졸업식", "steps": [{"kind": "tts", "text": "안내"}], "time": "10:00", "dates": ["2027-02-20"]}
+    assert client.post("/api/broadcasts", json=body, headers=HEADERS).json()["next"] == {"date": "2027-02-20", "time": "10:00"}
+    assert client.get("/api/status").json()["next"]["date"] == "2027-02-20"
+
+
+def test_skip_of_an_already_aired_broadcast_is_refused(env):
+    client, _, _ = env
+    res = client.put("/api/overrides", json={"date": "2026-11-20", "slot_id": "morning", "action": "skip"}, headers=HEADERS)
+    assert res.status_code == 409
+
+
+def test_day_off_wins_over_time_change_but_not_over_force(env):
+    # Arrange: 11/23 점심을 12:30으로 옮겨 두고, 그 날을 쉬는 날로
+    client, _, _ = env
+    client.put("/api/overrides", json={"date": "2026-11-23", "slot_id": "lunch", "action": "change", "time": "12:30"}, headers=HEADERS)
+    client.post("/api/days-off", json={"start": "2026-11-23", "end": "2026-11-23"}, headers=HEADERS)
+    cell = lambda: next(r for r in client.get("/api/week?start=2026-11-23").json()["rows"] if r["slot"]["id"] == "lunch")["cells"][0]
+    # Assert: 쉬는 날이 이긴다
+    assert cell()["status"] == "off" and cell()["time"] == "12:30"
+    # Act: 이번만 켜기
+    client.put("/api/overrides", json={"date": "2026-11-23", "slot_id": "lunch", "action": "change", "time": "12:30", "force": True}, headers=HEADERS)
+    assert cell()["status"] in ("scheduled", "next")

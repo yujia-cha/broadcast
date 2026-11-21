@@ -12,10 +12,11 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -24,6 +25,9 @@ from . import APP_ID, GITHUB_REPO
 log = logging.getLogger(__name__)
 
 ASSET_NAME = f"{APP_ID}.exe"
+# 배포 테스트 전용: 로컬 가짜 릴리즈 주소(http://127.0.0.1:...만 허용). 사용자 PC에서는 쓰지 않는다.
+FEED_ENV = "JEONGSI_UPDATE_FEED"
+LOCAL_FEED_PREFIX = "http://127.0.0.1:"
 CHECKSUM_SUFFIX = ".sha256"
 USER_AGENT = f"{APP_ID}-updater"
 CHUNK = 64 * 1024
@@ -76,9 +80,14 @@ class Updater:
         repo: str = GITHUB_REPO,
         opener: Callable[[str], object] = _open,
         on_change: Callable[[], None] | None = None,
+        feed_url: str | None = None,
     ):
+        if feed_url is not None and not feed_url.startswith(LOCAL_FEED_PREFIX):
+            raise ValueError("테스트용 업데이트 주소는 http://127.0.0.1만 허용합니다.")
         self.current_version = current_version
         self._repo = repo
+        self._feed_url = feed_url or f"https://api.github.com/repos/{repo}/releases/latest"
+        self._download_prefix = LOCAL_FEED_PREFIX if feed_url else "https://github.com/"
         self._open = opener
         self._on_change = on_change or (lambda: None)
         self._lock = threading.Lock()
@@ -94,6 +103,12 @@ class Updater:
         snap["current"] = self.current_version
         return snap
 
+    def mark_downloading(self) -> None:
+        self._set(state="downloading", progress=0)
+
+    def mark_error(self, message: str) -> None:
+        self._set(state="error", message=message)
+
     def _set(self, **values) -> None:
         with self._lock:
             self._state = values
@@ -101,10 +116,16 @@ class Updater:
 
     # 확인 ------------------------------------------------------------------
     def check(self) -> ReleaseInfo | None:
-        """최신 정식 릴리즈가 현재보다 새 버전이면 돌려준다. 네트워크 오류는 UpdateError."""
+        """최신 정식 릴리즈가 현재보다 새 버전이면 돌려준다. 네트워크 오류는 UpdateError.
+
+        받는 중이거나 적용을 기다리는 중이면 상태를 건드리지 않는다(되돌리면 같은 파일을 두 번 받게 된다).
+        """
+        with self._lock:
+            if self._state.get("state") in ("downloading", "ready"):
+                return self._release
         self._set(state="checking")
         try:
-            with self._open(f"https://api.github.com/repos/{self._repo}/releases/latest") as resp:
+            with self._open(self._feed_url) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:  # 아직 릴리즈가 없음
@@ -134,7 +155,7 @@ class Updater:
             log.warning("릴리즈 %s에 %s 또는 체크섬 파일이 없습니다", tag, ASSET_NAME)
             return None
         for url in (asset_url, checksum_url):
-            if not url.startswith("https://github.com/"):
+            if not url.startswith(self._download_prefix):
                 log.warning("허용하지 않는 다운로드 주소: %s", url)
                 return None
         return ReleaseInfo(
@@ -172,6 +193,11 @@ class Updater:
             partial.unlink(missing_ok=True)
             self._set(state="error", message=str(exc))
             raise
+        except PermissionError as exc:
+            partial.unlink(missing_ok=True)
+            message = "이 폴더에는 업데이트를 쓸 수 없습니다. 릴리즈 페이지에서 새 버전을 직접 받아 주세요."
+            self._set(state="error", message=message)
+            raise UpdateError(message) from exc
         except OSError as exc:
             partial.unlink(missing_ok=True)
             self._set(state="error", message="업데이트 파일을 받지 못했습니다.")
@@ -193,9 +219,40 @@ def old_exe_path(exe_path: Path) -> Path:
     return exe_path.with_name(exe_path.stem + ".old" + exe_path.suffix)
 
 
-def apply_update(new_file: Path, exe_path: Path, launch: Callable[[list[str]], None] | None = None) -> None:
+def relaunch_env(environ: Mapping[str, str]) -> dict[str, str]:
+    """새 exe가 이전 exe의 자식으로 착각하지 않게 PyInstaller 실행 정보를 지운 환경.
+
+    onefile exe는 자식 프로세스에 압축 해제 폴더 위치(_PYI_*, _MEIPASS2)를 넘긴다.
+    이 값이 남아 있으면 새 exe가 이전 버전의 임시 폴더로 실행되어, 이전 버전이 끝나지 않고
+    새 버전도 제대로 뜨지 않는다. PyInstaller 6.9+는 PYINSTALLER_RESET_ENVIRONMENT=1을 본다.
+    """
+    env = {k: v for k, v in environ.items() if not k.upper().startswith(("_PYI_", "_MEIPASS"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def _launch_detached(args: list[str]) -> None:
+    """이전 앱이 끝나도 새 앱이 같이 끝나지 않도록 분리해서 실행한다."""
+    env = relaunch_env(os.environ)
+    flags = 0
+    if sys.platform == "win32":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            subprocess.Popen(args, close_fds=True, env=env, creationflags=flags | 0x01000000)  # CREATE_BREAKAWAY_FROM_JOB  # noqa: S603
+            return
+        except OSError:
+            log.info("작업 그룹에서 분리할 수 없어 일반 방식으로 실행합니다")
+    subprocess.Popen(args, close_fds=True, env=env, creationflags=flags)  # noqa: S603
+
+
+def apply_update(
+    new_file: Path,
+    exe_path: Path,
+    launch: Callable[[list[str]], None] | None = None,
+    extra_args: list[str] | None = None,
+) -> None:
     """exe를 교체하고 새 exe를 실행한다. 교체에 실패하면 원래 exe를 되돌린다."""
-    launch = launch or (lambda args: subprocess.Popen(args, close_fds=True))  # noqa: S603
+    launch = launch or _launch_detached
     old = old_exe_path(exe_path)
     try:
         old.unlink(missing_ok=True)
@@ -207,13 +264,36 @@ def apply_update(new_file: Path, exe_path: Path, launch: Callable[[list[str]], N
     try:
         os.replace(new_file, exe_path)
     except OSError as exc:
-        os.replace(old, exe_path)
+        _rollback(old, exe_path)
         raise UpdateError(f"새 버전으로 바꾸지 못했습니다: {exc}") from exc
-    launch([str(exe_path), "--updated"])
-
-
-def cleanup_old_exe(exe_path: Path) -> None:
     try:
-        old_exe_path(exe_path).unlink(missing_ok=True)
+        launch([str(exe_path), *(extra_args or []), "--updated"])
+    except OSError as exc:  # 예: 백신이 새 파일을 막음
+        failed = exe_path.with_name(exe_path.stem + ".failed" + exe_path.suffix)
+        try:
+            os.replace(exe_path, failed)
+        except OSError:
+            log.exception("실행하지 못한 새 버전을 옮기지 못했습니다")
+        _rollback(old, exe_path)
+        raise UpdateError(f"새 버전을 실행하지 못해 이전 버전으로 되돌렸습니다: {exc}") from exc
+
+
+def _rollback(old: Path, exe_path: Path) -> None:
+    try:
+        os.replace(old, exe_path)
     except OSError:
-        log.info("이전 버전 파일을 아직 지울 수 없습니다")
+        log.exception("이전 버전으로 되돌리지 못했습니다. %s 이름을 %s로 바꾸면 복구됩니다", old.name, exe_path.name)
+
+
+def cleanup_old_exe(exe_path: Path, attempts: int = 20, delay: float = 0.5) -> None:
+    """이전 버전 exe를 지운다. 이전 앱이 막 끝나는 중이면 잠시 잠겨 있을 수 있어 몇 번 다시 시도한다."""
+    import time
+
+    old = old_exe_path(exe_path)
+    for _ in range(attempts):
+        try:
+            old.unlink(missing_ok=True)
+            return
+        except OSError:
+            time.sleep(delay)
+    log.info("이전 버전 파일을 아직 지울 수 없습니다. 다음 실행 때 다시 지웁니다")

@@ -38,17 +38,21 @@ def resolve_day(config: Config, day: date) -> list[Occurrence]:
     day_off = config.day_off_for(day)
     result: list[Occurrence] = []
     for slot in config.slots:
-        if not slot.enabled or day.weekday() not in slot.weekdays:
+        if not slot.occurs_on(day):
             continue
         base_time = parse_hhmm(slot.time)
         override = config.override_for(day, slot.id)
         when, program_id, skipped, changed = base_time, slot.program_id, False, False
         if override is not None and override.action == "skip":
             skipped = True
+            if override.time:  # 끄기 전에 바꿔 둔 시각을 그대로 보여 준다
+                when = parse_hhmm(override.time)
+                changed = when != base_time
         elif override is not None and override.action == "change":
             when = parse_hhmm(override.time) if override.time else base_time
             program_id = override.program_id or slot.program_id
             changed = True
+            skipped = day_off is not None and not override.force  # 쉬는 날은 '이번만 켜기'만 이긴다
         elif day_off is not None:
             skipped = True
         result.append(
@@ -77,7 +81,10 @@ def occurrences_between(config: Config, start: datetime, end: datetime) -> Itera
         day += timedelta(days=1)
 
 
-def next_occurrence(config: Config, now: datetime, search_days: int = 60) -> Occurrence | None:
+NEXT_SEARCH_DAYS = 400  # 몇 달 뒤의 특정 날짜도 '다음 방송'으로 보이게
+
+
+def next_occurrence(config: Config, now: datetime, search_days: int = NEXT_SEARCH_DAYS) -> Occurrence | None:
     """now 이후 첫 방송. 쉬는 회차는 건너뛴다."""
     for offset in range(search_days + 1):
         day = now.date() + timedelta(days=offset)
@@ -85,3 +92,12 @@ def next_occurrence(config: Config, now: datetime, search_days: int = 60) -> Occ
             if not occ.skipped and occ.at > now:
                 return occ
     return None
+
+
+def date_state(config: Config, slot_time: str, day: date, now: datetime) -> str:
+    """새 회차를 그 날짜에 둘 때 실제로 나가는지: "ok", "past"(이미 지남), "off"(쉬는 날)."""
+    if datetime.combine(day, parse_hhmm(slot_time)) <= now:
+        return "past"
+    if config.day_off_for(day) is not None:
+        return "off"
+    return "ok"

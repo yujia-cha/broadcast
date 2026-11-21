@@ -1,0 +1,39 @@
+name: Release
+
+# v1.2.0 같은 태그를 push하면 Package 워크플로(빌드+배포 스모크 테스트)가 통과한 exe를 릴리즈에 올린다.
+# 앱은 이 릴리즈의 JeongsiBroadcast.exe와 JeongsiBroadcast.exe.sha256으로 업데이트한다.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: test
+    uses: ./.github/workflows/package.yml
+    with:
+      version: ${{ github.ref_name }}
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: JeongsiBroadcast-windows
+          path: dist
+      - name: 체크섬 다시 확인
+        run: cd dist && sha256sum -c JeongsiBroadcast.exe.sha256
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/JeongsiBroadcast.exe
+            dist/JeongsiBroadcast.exe.sha256
+          generate_release_notes: true
