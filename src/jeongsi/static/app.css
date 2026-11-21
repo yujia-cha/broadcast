@@ -611,3 +611,5 @@ input.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2
 .cblock.tight .cb-top svg.i { display: none; }
 @media (max-width: 1100px) { .legend { display: inline-flex; } }
 main.view:focus { outline: none; }
+.tp-scale { margin-bottom: 20px; } /* 눈금 숫자(아래로 18px)가 다음 줄과 붙지 않게 */
+.pop .tp-track { margin-bottom: 0; }
