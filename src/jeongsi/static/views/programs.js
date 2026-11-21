@@ -65,6 +65,7 @@ function render() {
 
 function renderList() {
   listEl.replaceChildren(
+    h("button", { class: "btn ghost sm plist-media", on: { click: openMediaDialog } }, icon("music"), `음악 파일 ${ctx.media.length}`),
     ...ctx.programs.map((p) =>
       h("button", { class: "plist-item", "aria-current": String(p.id === st.selectedId), on: { click: () => switchTo(p) } },
         h("b", null, p.name),
@@ -72,7 +73,6 @@ function renderList() {
         h("span", null, `${fmtDuration(p.seconds)}${p.used_by.length ? ` · 예약 ${p.used_by.length}개` : " · 예약 없음"}`),
       )),
     h("button", { class: "plist-add", "aria-label": "새 방송 구성", on: { click: () => switchTo(null) } }, icon("plus")),
-    h("button", { class: "btn ghost sm", on: { click: openMediaDialog } }, icon("music"), `음악 파일 ${ctx.media.length}`),
   );
 }
 

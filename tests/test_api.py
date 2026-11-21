@@ -411,8 +411,23 @@ def test_day_off_already_covered_is_refused(env):
     same = client.post("/api/days-off", json={"start": "2026-11-23", "end": "2026-11-27"}, headers=HEADERS)
     inside = client.post("/api/days-off", json={"start": "2026-11-25", "end": "2026-11-25"}, headers=HEADERS)
     wider = client.post("/api/days-off", json={"start": "2026-11-27", "end": "2026-11-28"}, headers=HEADERS)
-    # Assert: 겹치기만 하면 허용(새 날이 늘어남)
+    # Assert: 겹치면 하나로 합쳐 넓어진다
     assert same.status_code == 409 and "이미 쉬는 날" in same.json()["error"]
     assert inside.status_code == 409
     assert wider.status_code == 201
-    assert len(services.store.config.days_off) == 2
+    days_off = services.store.config.days_off
+    assert [(d.start.isoformat(), d.end.isoformat()) for d in days_off] == [("2026-11-23", "2026-11-28")]
+
+
+def test_adjacent_days_off_merge_and_keep_memo(env):
+    # Arrange
+    client, services, _ = env
+    client.post("/api/days-off", json={"start": "2026-12-21", "end": "2026-12-24", "memo": "겨울 방학"}, headers=HEADERS)
+    # Act: 맞닿은 날(12/25)과 떨어진 날(12/31)
+    merged = client.post("/api/days-off", json={"start": "2026-12-25", "end": "2026-12-25"}, headers=HEADERS)
+    apart = client.post("/api/days-off", json={"start": "2026-12-31", "end": "2026-12-31"}, headers=HEADERS)
+    # Assert
+    assert merged.status_code == 201 and merged.json()["end"] == "2026-12-25" and merged.json()["memo"] == "겨울 방학"
+    assert apart.status_code == 201
+    assert sorted((d.start.isoformat(), d.end.isoformat()) for d in services.store.config.days_off) == [
+        ("2026-12-21", "2026-12-25"), ("2026-12-31", "2026-12-31")]

@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -345,13 +345,27 @@ def create_app(services: Services) -> FastAPI:
         body.pop("id", None)
         day_off = DayOff.model_validate(body)
 
+        result: dict = {}
+
         def mutate(c: Config):
             if any(d.start <= day_off.start and day_off.end <= d.end for d in c.days_off):
                 raise _bad(409, "이미 쉬는 날입니다.")
-            c.days_off.append(day_off)
+            # 겹치거나 맞닿은 기간은 하나로 합친다(목록에 같은 날이 두 번 나오지 않게)
+            one_day = timedelta(days=1)
+            touching = [d for d in c.days_off if d.start <= day_off.end + one_day and day_off.start <= d.end + one_day]
+            merged = day_off
+            if touching:
+                merged = DayOff(
+                    start=min([day_off.start, *(d.start for d in touching)]),
+                    end=max([day_off.end, *(d.end for d in touching)]),
+                    memo=day_off.memo or next((d.memo for d in touching if d.memo), ""),
+                )
+                c.days_off = [d for d in c.days_off if d not in touching]
+            c.days_off.append(merged)
+            result.update(merged.model_dump(mode="json"))
 
         update(mutate)
-        return day_off.model_dump(mode="json")
+        return result
 
     @app.delete("/api/days-off/{day_off_id}", status_code=204)
     def delete_day_off(day_off_id: str):

@@ -64,6 +64,10 @@ async function loadWeek() {
     if (token !== st.loadToken || !root || st.dragging) return;
     st.week = week;
     st.start = week.start;
+    // 지금 패널의 '오늘' 눈금은 다른 주를 보고 있어도 이번 주 기준으로 그린다
+    const thisWeek = week.days.some((d) => d.date === todayIso()) ? week : await get("/api/week").catch(() => null);
+    if (token !== st.loadToken || !root) return;
+    st.today = thisWeek ? todayOf(thisWeek) : st.today;
     ctx.weekSlots = week.rows.map((r) => r.slot);
     renderGrid();
     renderNow();
@@ -407,12 +411,13 @@ function undoChip(skip) {
   return h("button", { class: "undo-chip", "data-focus": "undo", on: { click: undoSkip } }, icon("undo"), `${skip.time} ${skip.name} 되돌리기`);
 }
 
-function todayCells() {
-  if (!st.week) return [];
-  const i = st.week.days.findIndex((d) => d.date === todayIso());
+function todayOf(week) {
+  const i = week.days.findIndex((d) => d.date === todayIso());
   if (i < 0) return [];
-  return st.week.rows.map((r) => r.cells[i]).filter((c) => c.time && c.status !== "off");
+  return week.rows.map((r) => r.cells[i]).filter((c) => c.time && c.status !== "off");
 }
+
+const todayCells = () => st.today || [];
 
 async function broadcastNow(programId) {
   closePopover();
