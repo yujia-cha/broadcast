@@ -45,15 +45,15 @@ async function main() {
       await page.click('.cp-item[aria-label="1번"]');
       await page.waitForSelector(".tp-time");
       // −1시간 버튼을 키보드로 이어 누를 수 있어야 한다(누른 뒤에도 초점이 버튼에 남음)
-      const before = await page.textContent(".tp-time");
+      const before = await page.inputValue(".tp-time");
       await page.focus('button[aria-label="1시간 일찍"]');
       await page.keyboard.press("Enter");
       await page.keyboard.press("Enter");
       const two = Math.max(0, Number(before.slice(0, 2)) - 2);
-      if (Number((await page.textContent(".tp-time")).slice(0, 2)) !== two) throw new Error(`−1시간을 두 번 눌렀는데 ${await page.textContent(".tp-time")}`);
+      if (Number((await page.inputValue(".tp-time")).slice(0, 2)) !== two) throw new Error(`−1시간을 두 번 눌렀는데 ${await page.inputValue(".tp-time")}`);
       await page.focus(".tp-pin");
       await page.keyboard.press("End");
-      if ((await page.textContent(".tp-time")) !== "23:55") throw new Error(`시각이 다릅니다: ${await page.textContent(".tp-time")}`);
+      if ((await page.inputValue(".tp-time")) !== "23:55") throw new Error(`시각이 다릅니다: ${await page.inputValue(".tp-time")}`);
       await shot("02-wizard-time");
       await page.keyboard.press("Enter");
       await page.click(".wz-tile >> text=매주");
@@ -180,7 +180,8 @@ async function main() {
       await page.click("dialog >> button:has-text('추가')");
       await page.waitForSelector("dialog .off-chip >> text=겨울 방학");
       await page.waitForSelector("dialog .rc-day.marked");
-      await page.click('dialog .off-x[aria-label="삭제"]');
+      await page.click('dialog .off-x[aria-label$="삭제"]');
+      await page.waitForSelector("#toast.show .toast-act >> text=되돌리기");
       await page.waitForSelector("dialog .off-chip", { state: "detached" });
       await page.click("dialog >> text=닫기");
     });

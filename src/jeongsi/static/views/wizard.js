@@ -254,9 +254,9 @@ function fileField(d) {
 
 function timeField(d) {
   if (!d.time) {
-    // 기본값: 지금 이후 가장 가까운 정각(오늘 고르면 바로 '지남'이 되지 않게)
-    const hour = Math.min(23, Number(ctx.status.now.slice(11, 13)) + 1);
-    d.time = `${String(hour).padStart(2, "0")}:00`;
+    // 기본값: 낮에는 지금 이후 가장 가까운 정각(오늘 고르면 바로 '지남'이 되지 않게), 밤·새벽에는 09:00
+    const hour = Number(ctx.status.now.slice(11, 13)) + 1;
+    d.time = hour >= 7 && hour <= 18 ? `${String(hour).padStart(2, "0")}:00` : "09:00";
   }
   return timePicker(d.time, (v, done) => { d.time = v; refreshPrimary(); if (done) next(); });
 }

@@ -28,7 +28,7 @@ export function mount(el, appCtx) {
   root = el;
   mainEl = h("section", { class: "cal-wrap", "aria-label": "주간 시간표" }, h("div", { class: "skel" }));
   nowEl = h("div");
-  el.replaceChildren(h("div", { class: "tt-page" }, mainEl, h("aside", { class: "rail", "aria-label": "지금" }, nowEl)));
+  el.replaceChildren(h("div", { class: "tt-page" }, h("aside", { class: "rail", "aria-label": "지금" }, nowEl), mainEl));
   st.weekKey = weekKey(ctx.status);
   st.scrolled = false;
   loadWeek();
@@ -89,7 +89,7 @@ const todayIso = () => ctx.status.now.slice(0, 10);
 
 // 달력 -------------------------------------------------------------------------
 function hourRange(rows) {
-  const mins = [nowMinutes(), ...rows.flatMap((r) => r.cells.filter((c) => c.time).map((c) => toMinutes(c.time)))];
+  const mins = rows.flatMap((r) => r.cells.filter((c) => c.time).map((c) => toMinutes(c.time)));
   let from = Math.min(8 * 60, ...mins.map((m) => Math.floor(m / 60) * 60 - 60));
   let to = Math.max(17 * 60, ...mins.map((m) => Math.ceil(m / 60) * 60 + 60));
   from = Math.max(0, from);
@@ -99,13 +99,14 @@ function hourRange(rows) {
 
 function renderGrid() {
   const w = st.week;
-  const isThisWeek = w.days.some((d) => d.date === todayIso());
+  const isThisWeek = w.start === w.home;
   const bar = h("div", { class: "weekbar" },
     h("button", { class: "ibtn", "aria-label": "지난주", on: { click: () => changeWeek(-7) } }, icon("left")),
     h("button", { class: "ibtn", "aria-label": "다음 주", on: { click: () => changeWeek(7) } }, icon("right")),
     h("h2", null, fmtWeekTitle(w.days[0].date, w.days.at(-1).date)),
     isThisWeek ? null : h("button", { class: "btn sm", on: { click: () => { st.start = null; loadWeek(); } } }, "이번 주"),
     h("span", { class: "grow" }),
+    w.rows.length ? legend() : null,
     h("button", { class: "btn sm ghost", on: { click: () => openDaysOffDialog() } }, icon("calendarOff"), "쉬는 날"),
   );
 
@@ -135,7 +136,8 @@ function renderGrid() {
       },
         h("b", null, day.label),
         h("span", null, fmtMonthDay(day.date)),
-        day.day_off ? h("i", { class: "cal-day-off" }, icon("ban")) : null,
+        day.day_off ? h("i", { class: "cal-day-off" }, icon("calendarOff")) : null,
+        day.day_off?.memo ? h("small", { class: "cal-day-memo" }, day.day_off.memo) : null,
       )));
 
   const axis = h("div", { class: "cal-axis", style: { height: `${height}px` } },
@@ -191,17 +193,32 @@ function layoutLanes(items) {
   return out;
 }
 
+function statusWord(cell) {
+  if (cell.status === "off") return cell.override?.action === "skip" ? "이번만 끔" : "쉬는 날";
+  if (cell.status === "disabled") return "꺼 둔 방송";
+  if (cell.changed) return "이 날만 바뀜";
+  return { next: "다음 방송", past: "지남", live: "방송 중", scheduled: "예정" }[cell.status] || "";
+}
+
+function legend() {
+  const item = (cls, label) => h("span", { class: "lg-item" }, h("i", { class: `lg-sw ${cls}` }), label);
+  return h("span", { class: "legend", "aria-hidden": "true" },
+    item("next", "다음"), item("chg", "이 날만 바뀜"), item("off", "끔·쉬는 날"), item("disabled", "꺼 둠"));
+}
+
 function block(row, cell, from, index, count) {
   const bh = blockPx();
   const top = ((toMinutes(cell.time) - from) / 60) * st.hourPx - bh / 2;
   const el = h("button", {
     class: `cblock ${cell.status}${cell.changed && cell.status !== "off" ? " chg" : ""}${bh < 44 ? " compact" : ""}`,
     style: { top: `${top}px`, height: `${bh}px`, left: `calc(${(index * 100) / count}% + 3px)`, width: `calc(${100 / count}% - 6px)` },
-    "aria-label": `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}`,
+    "aria-label": `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}, ${statusWord(cell)}`,
   },
     h("span", { class: "cb-top" },
       h("b", { class: "cb-time" }, cell.time),
-      cell.status === "off" ? icon("ban") : cell.status === "live" ? h("span", { class: "dot" }) : null,
+      cell.status === "off" ? icon(cell.override?.action === "skip" ? "ban" : "calendarOff")
+        : cell.status === "disabled" ? icon("ban")
+        : cell.status === "live" ? h("span", { class: "dot" }) : null,
     ),
     h("span", { class: "cb-name" }, row.slot.name),
     strip(cell.strip || [], { size: "xs" }),
@@ -271,20 +288,28 @@ async function moveTime(row, cell, hhmm, undoable = false) {
 
 // 블록 팝오버 -------------------------------------------------------------------
 function blockPopover(anchor, row, cell) {
+  if (cell.status === "disabled") {
+    return popover(anchor, h("div", { class: "pop-in" },
+      h("div", { class: "pop-head" }, h("b", null, cell.time), h("span", null, row.slot.name), h("small", null, "꺼 둔 방송")),
+      h("div", { class: "ia-row" },
+        iconAction("check", "다시 켜기", () => setEnabled(row.slot, true)),
+        iconAction("edit", "방송 편집", () => { closePopover(); openSlotDialog(row.slot); }),
+      )));
+  }
   const past = ["past", "live"].includes(cell.status);
   const offByOverride = cell.status === "off" && cell.override?.action === "skip";
   const offByDay = cell.status === "off" && !cell.override;
   const program = ctx.programs.find((p) => p.id === cell.program_id);
   const actions = [];
-  if (program) actions.push(iconAction("play", "지금", () => broadcastNow(program.id)));
+  if (program) actions.push(iconAction("play", "지금", () => broadcastNow(program.id, row.slot.name)));
   if (!past) {
     if (offByOverride) actions.push(iconAction("undo", "되살리기", () => clearOverride(row, cell, "다시 방송합니다.")));
     else if (offByDay) actions.push(iconAction("check", "이번만 켜기", () => setOverride(row, cell, { action: "change", time: cell.time }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}만 방송합니다.`)));
-    else actions.push(iconAction("ban", "이번만 끄기", () => setOverride(row, cell, { action: "skip" }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name} 끔`)));
-    if (!offByOverride) actions.push(iconAction("clock", "시각", () => timeEditor(anchor, row, cell)));
+    else actions.push(iconAction("ban", "이번만 끄기", () => setOverride(row, cell, { action: "skip" }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name} 끔`, true)));
+    if (!offByOverride) actions.push(iconAction("clock", "이 날만 시각", () => timeEditor(anchor, row, cell)));
     if (cell.changed) actions.push(iconAction("undo", "원래대로", () => clearOverride(row, cell, "원래대로 돌렸습니다.")));
   }
-  actions.push(iconAction("edit", "편집", () => { closePopover(); openSlotDialog(row.slot); }));
+  actions.push(iconAction("edit", "방송 편집", () => { closePopover(); openSlotDialog(row.slot); }));
   popover(anchor,
     h("div", { class: "pop-in" },
       h("div", { class: "pop-head" }, h("b", null, cell.time), h("span", null, row.slot.name), h("small", null, fmtDate(cell.date))),
@@ -298,15 +323,37 @@ function timeEditor(anchor, row, cell) {
   popover(anchor,
     h("div", { class: "pop-in" },
       h("div", { class: "pop-head" }, h("span", null, row.slot.name), h("small", null, fmtDate(cell.date))),
-      timePicker(value, (v, done) => { value = v; if (done) moveTime(row, cell, value); }),
-      h("div", { class: "ia-row" }, h("button", { class: "btn pri", on: { click: () => moveTime(row, cell, value) } }, icon("check"), "적용")),
+      timePicker(value, (v, done) => { value = v; if (done) moveTime(row, cell, value, true); }),
+      h("div", { class: "ia-row" }, h("button", { class: "btn pri", on: { click: () => moveTime(row, cell, value, true) } }, icon("check"), "적용")),
     ));
 }
 
-async function setOverride(row, cell, change, message) {
+async function setOverride(row, cell, change, message, undoable = false) {
   try {
     await put("/api/overrides", { date: cell.date, slot_id: row.slot.id, ...change });
-    await refresh(message);
+    closePopover();
+    await loadWeek();
+    const before = cell.override;
+    const undo = async () => {
+      try {
+        if (before) { const { id, ...prev } = before; await put("/api/overrides", prev); }
+        else await del(`/api/overrides/${cell.date}/${row.slot.id}`);
+        await refresh("되돌렸습니다.");
+      } catch (err) { toastError(err); }
+    };
+    toast(message, undoable ? { action: { label: "되돌리기", fn: undo } } : {});
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+async function setEnabled(slot, enabled) {
+  try {
+    await put(`/api/slots/${slot.id}`, { ...slot, enabled });
+    closePopover();
+    await loadWeek();
+    toast(enabled ? `${slot.name}을(를) 다시 켰습니다.` : `${slot.name}을(를) 껐습니다.`,
+      { action: { label: "되돌리기", fn: () => setEnabled({ ...slot, enabled }, !enabled) } });
   } catch (err) {
     toastError(err);
   }
@@ -330,7 +377,19 @@ function dayPopover(anchor, day) {
         try { await del(`/api/days-off/${off.id}`); await refresh("쉬는 날을 해제했습니다."); } catch (err) { toastError(err); }
       })]
     : [iconAction("ban", "이 날 쉬기", async () => {
-        try { await post("/api/days-off", { start: day.date, end: day.date, memo: "" }); await refresh(`${fmtDate(day.date)} 쉽니다.`); } catch (err) { toastError(err); }
+        try {
+          const made = await post("/api/days-off", { start: day.date, end: day.date, memo: "" });
+          closePopover();
+          await loadWeek();
+          const undo = async () => {
+            try {
+              // 합쳐진 기간이면 하루만 빼기 어렵다: 이 날 하나로 새로 만든 경우에만 지운다
+              if (made.start === day.date && made.end === day.date) await del(`/api/days-off/${made.id}`);
+              await refresh("되돌렸습니다.");
+            } catch (err) { toastError(err); }
+          };
+          toast(`${fmtDate(day.date)} 쉽니다.`, made.start === made.end ? { action: { label: "되돌리기", fn: undo } } : {});
+        } catch (err) { toastError(err); }
       })];
   actions.push(iconAction("calendarOff", "여러 날", () => { closePopover(); openDaysOffDialog(day.date); }));
   popover(anchor, h("div", { class: "pop-in" },
@@ -400,7 +459,7 @@ function nextCard(status) {
     h("span", { class: "meta" }, `약 ${fmtDuration(n.seconds)}`),
     ruler,
     h("div", { class: "ia-row" },
-      tag(iconAction("play", "지금", () => broadcastNow(n.program_id)), "now"),
+      tag(iconAction("play", "지금", () => broadcastNow(n.program_id, n.name)), "now"),
       tag(iconAction("ban", "이번만 끄기", skipNext), "skip-next"),
     ),
     skip ? undoChip(skip) : null,
@@ -419,8 +478,10 @@ function todayOf(week) {
 
 const todayCells = () => st.today || [];
 
-async function broadcastNow(programId) {
+async function broadcastNow(programId, name) {
   closePopover();
+  // 스피커로 바로 나가는 일이므로 한 번 묻는다(예약된 방송은 그대로 나간다)
+  if (!(await confirmDialog({ title: `'${name}'을(를) 지금 방송할까요?`, message: "다른 소리를 잠시 멈추고 바로 내보냅니다.", confirm: "지금 방송" }))) return;
   try {
     await post("/api/broadcast", { program_id: programId });
     toast("방송을 시작합니다.");
@@ -615,8 +676,16 @@ async function openDaysOffDialog(prefill) {
       list.replaceChildren(...items.map((d) =>
         h("span", { class: "off-chip" }, icon("ban"),
           `${fmtMonthDay(d.start)}${d.start === d.end ? "" : `~${fmtMonthDay(d.end)}`}${d.memo ? ` ${d.memo}` : ""}`,
-          h("button", { class: "off-x", "aria-label": "삭제", on: { click: async () => {
-            try { await del(`/api/days-off/${d.id}`); await paint(); await loadWeek(); } catch (err) { errEl.textContent = err.message; }
+          h("button", { class: "off-x", "aria-label": `${fmtMonthDay(d.start)}${d.start === d.end ? "" : `~${fmtMonthDay(d.end)}`}${d.memo ? ` ${d.memo}` : ""} 삭제`, on: { click: async () => {
+            try {
+              await del(`/api/days-off/${d.id}`);
+              await paint();
+              await loadWeek();
+              const { id, ...again } = d;
+              toast(`쉬는 날(${fmtMonthDay(d.start)}${d.start === d.end ? "" : `~${fmtMonthDay(d.end)}`})을 지웠습니다.`, {
+                action: { label: "되돌리기", fn: async () => { try { await post("/api/days-off", again); await paint(); await loadWeek(); } catch (err) { toastError(err); } } },
+              });
+            } catch (err) { errEl.textContent = err.message; }
           } } }, icon("x")))));
       paintCalendar();
     } catch (err) {

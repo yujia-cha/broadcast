@@ -68,6 +68,9 @@ let toastTimer;
 /** action: { label, fn } — 토스트 안에 되돌리기 같은 버튼 하나를 둔다 */
 export function toast(message, { error = false, action = null } = {}) {
   const el = document.getElementById("toast");
+  // 모달 대화상자가 열려 있으면 그 위(최상위 층)에 보이도록 대화상자 안으로 옮긴다
+  const host = [...document.querySelectorAll("dialog[open]")].at(-1) || document.body;
+  if (el.parentElement !== host) host.append(el);
   el.replaceChildren(h("span", null, message));
   if (action) {
     el.append(h("button", { class: "toast-act", on: { click: () => { el.classList.remove("show"); action.fn(); } } }, action.label));

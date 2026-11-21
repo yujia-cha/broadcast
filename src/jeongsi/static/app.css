@@ -322,8 +322,10 @@ textarea.wz-input { height: auto; min-height: 120px; padding: var(--s3) var(--s4
 /* 시각 고르기 */
 .tp { display: grid; gap: var(--s4); }
 .tp-display { display: flex; align-items: center; justify-content: center; gap: var(--s3); }
-.tp-time { font-size: 44px; font-weight: 600; letter-spacing: -.02em; min-width: 140px; text-align: center; }
-.tp-scale { display: grid; grid-template-columns: 18px 1fr 18px; gap: var(--s2); align-items: center; color: var(--muted); }
+.tp-time { font: inherit; font-size: 44px; font-weight: 600; letter-spacing: -.02em; width: 150px; text-align: center; border: 1.5px solid transparent; border-radius: var(--r-md); background: none; color: var(--text); padding: 0; font-variant-numeric: tabular-nums; }
+.tp-time:hover { border-color: var(--line-strong); }
+.tp-time:focus { border-color: var(--accent); outline: none; background: var(--surface); }
+.tp-scale { display: grid; grid-template-columns: 1fr; gap: var(--s2); align-items: center; color: var(--muted); }
 .tp-track { position: relative; height: 40px; border-radius: 20px; background: linear-gradient(90deg, var(--sunken), var(--accent-subtle) 50%, var(--sunken)); cursor: pointer; touch-action: none; }
 .tp-tick { position: absolute; bottom: -18px; transform: translateX(-50%); font-size: 11px; color: var(--muted); }
 .tp-tick::before { content: ""; position: absolute; left: 50%; top: -12px; width: 1px; height: 6px; background: var(--line-strong); }
@@ -548,7 +550,7 @@ p.err { display: flex; align-items: center; gap: var(--s2); font-size: 13px; }
 .wz-dates { display: grid; gap: var(--s3); }
 .tp-ticks { position: absolute; inset: 0; }
 .tp-step { flex: none; }
-.pop .tp-time { font-size: 32px; min-width: 96px; }
+.pop .tp-time { font-size: 32px; width: 110px; }
 .media-row .in-use { font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-subtle); border-radius: 10px; padding: 2px 8px; white-space: nowrap; }
 /* 좁은 창: 지금 패널을 한두 줄로 눌러 담는다 */
 @media (max-width: 1100px) {

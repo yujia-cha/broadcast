@@ -24,7 +24,14 @@ class MediaError(Exception):
 
 def safe_filename(original: str) -> str:
     name = _UNSAFE_CHARS.sub("_", Path(original).name).strip(" .")
-    return name[:120] or "sound"
+    stem, suffix = Path(name).stem, Path(name).suffix[:10]
+    if not stem:
+        return "sound" + suffix if suffix else "sound"
+    # 확장자는 지키고, 한글처럼 글자당 여러 바이트인 이름도 파일 시스템 한도(255바이트) 안에 들게 줄인다
+    stem = stem[: 120 - len(suffix)]
+    while len((stem + suffix).encode("utf-8")) > 180:
+        stem = stem[:-1]
+    return stem + suffix
 
 
 class MediaLibrary:

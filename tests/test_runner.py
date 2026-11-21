@@ -194,10 +194,11 @@ def test_recover_restores_state_left_by_crash(tmp_path):
     assert not restore.exists()
 
 
-def test_recover_ignores_corrupt_file(tmp_path):
+@pytest.mark.parametrize("content", ["{깨짐", "[]", "null", '{"volume": 5}'])
+def test_recover_ignores_corrupt_file(tmp_path, content):
     runner, backend, _ = make_runner(tmp_path)
     restore = tmp_path / "work" / "restore.json"
-    restore.write_text("{깨짐", encoding="utf-8")
+    restore.write_text(content, encoding="utf-8")
     runner.recover()
     assert backend.media.calls == [] and not restore.exists()
 
@@ -253,9 +254,9 @@ def test_job_whose_check_fails_is_skipped(tmp_path):
         skipped = job()
         skipped.check = lambda: False
         runner.enqueue(skipped)
-        runner.enqueue(job(kind="manual"))
-        assert wait_until(lambda: runner.last_result and runner.last_result["kind"] == "manual")
-        assert backend.media.calls.count(("pause",)) == 1
+        runner.enqueue(job())
+        assert wait_until(lambda: runner.last_result is not None)
+        assert backend.media.calls.count(("pause",)) == 1  # 확인에 실패한 방송은 소리 처리도 하지 않는다
     finally:
         runner.shutdown()
 
@@ -285,5 +286,22 @@ def test_stop_with_kind_only_stops_matching(tmp_path):
         assert runner.stop_current(kind="preview") is False
         assert runner.on_air
         assert runner.stop_current(kind="scheduled") is True
+    finally:
+        runner.shutdown()
+
+
+def test_manual_broadcast_is_refused_while_another_is_queued(tmp_path):
+    # Arrange: 예약 방송이 재생 중(막힘)이고 대기열도 차 있음
+    backend = fake_backend()
+    backend.player = FakePlayer(block=True)
+    runner, _, _ = make_runner(tmp_path, backend=backend)
+    runner.start()
+    try:
+        runner.enqueue(job())
+        assert wait_until(lambda: runner.on_air)
+        # Act / Assert: 방송 중에 '지금'을 여러 번 눌러도 받지 않는다
+        for _ in range(3):
+            with pytest.raises(RunnerBusy):
+                runner.enqueue(job(kind="manual"))
     finally:
         runner.shutdown()

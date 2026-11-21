@@ -141,6 +141,15 @@ class Runner:
             return
         if job.kind == "preview" and self.busy:
             raise RunnerBusy("방송 중에는 미리듣기를 할 수 없습니다.")
+        if job.kind == "manual":
+            # 동시에 여러 번 눌러도 하나만 받는다(확인과 넣기를 한 번에)
+            with self._lock:
+                playing = self._status["state"] != "idle" and self._status.get("kind") != "preview"
+                if playing or not self._queue.empty():
+                    raise RunnerBusy("이미 방송 중이거나 곧 나갈 방송이 있습니다.")
+                self._queue.put(job)
+            self.stop_current(kind="preview")
+            return
         if job.kind != "preview":
             self.stop_current(kind="preview")  # 방송이 미리듣기보다 우선
         self._queue.put(job)
@@ -201,7 +210,7 @@ class Runner:
                 muted=list(raw.get("muted", [])),
                 volume=(float(volume[0]), bool(volume[1])) if volume else None,
             )
-        except (OSError, ValueError, TypeError, IndexError):
+        except (OSError, ValueError, TypeError, IndexError, AttributeError):
             log.exception("restore.json을 읽지 못했습니다")
             self._restore_path.unlink(missing_ok=True)
             return

@@ -15,17 +15,23 @@ def week_start(day: date) -> date:
 
 
 def visible_weekdays(config: Config, start: date | None = None) -> list[int]:
-    """평일은 항상, 주말은 그 주에 방송이 있을 때만 보인다."""
+    """평일은 항상, 주말은 그 주에 방송(꺼 둔 것 포함)이 있을 때만 보인다."""
     days = {0, 1, 2, 3, 4}
     week = [start + timedelta(days=i) for i in range(7)] if start else []
     for slot in config.slots:
-        if not slot.enabled:
-            continue
         if slot.dates:
             days.update(d.weekday() for d in week if d in slot.dates)
         else:
             days.update(slot.weekdays)
     return sorted(days)
+
+
+def home_week_start(config: Config, today: date) -> date:
+    """처음 보여 줄 주. 오늘이 이번 주 화면에 없으면(방송 없는 주말) 다음 주."""
+    start = week_start(today)
+    if today.weekday() not in visible_weekdays(config, start):
+        return start + timedelta(days=7)
+    return start
 
 
 def build_week(
@@ -34,7 +40,7 @@ def build_week(
     now: datetime,
     live: tuple[date, str] | None,
 ) -> dict:
-    """회차(행) × 요일(열) 표. 칸 상태: scheduled, next, past, off, live, none.
+    """회차(행) × 요일(열) 표. 칸 상태: scheduled, next, past, off, live, disabled(꺼 둔 회차), none.
 
     방송 기록을 남기지 않으므로 지난 회차는 방송 여부와 관계없이 past로 표시한다.
     """
@@ -65,7 +71,13 @@ def build_week(
             occ = by_day[d].get(slot.id)
             override = config.override_for(d, slot.id)
             cell: dict = {"date": d.isoformat(), "override": override.model_dump(mode="json") if override else None}
-            if occ is None:
+            if occ is None and not slot.enabled and slot.matches(d):
+                # 꺼 둔 회차도 흐리게 보여 줘야 다시 켤 수 있다
+                cell.update(time=slot.time, original_time=slot.time, changed=False, program_id=slot.program_id,
+                            program_name=program.name if program else "", summary=program.summary() if program else "",
+                            strip=[{"kind": st.kind, "repeat": st.repeat} for st in program.steps] if program else [],
+                            status="disabled")
+            elif occ is None:
                 cell["status"] = "none"
             else:
                 occ_program = config.program(occ.program_id)
@@ -87,7 +99,7 @@ def build_week(
                 "cells": cells,
             }
         )
-    return {"start": start.isoformat(), "days": days, "rows": rows}
+    return {"start": start.isoformat(), "home": home_week_start(config, now.date()).isoformat(), "days": days, "rows": rows}
 
 
 def _cell_status(occ, now, live, next_key) -> str:

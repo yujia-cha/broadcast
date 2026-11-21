@@ -28,9 +28,9 @@ from .audio.base import AudioBackend, Voice
 from .media import MediaError, MediaLibrary
 from .models import Config, DayOff, Override, Program, Settings, Slot, Step
 from .runner import Job, Runner, RunnerBusy
-from .schedule import next_occurrence
+from .schedule import NEXT_SEARCH_DAYS, next_occurrence
 from .storage import ConfigError, ConfigStore
-from .timetable import build_week, describe_next, week_start
+from .timetable import build_week, describe_next, home_week_start, week_start
 from .updater import UpdateError, Updater, apply_update
 
 log = logging.getLogger(__name__)
@@ -201,12 +201,15 @@ def create_app(services: Services) -> FastAPI:
 
     @app.get("/api/week")
     def week(start: date | None = None):
+        if start is not None and not date(2000, 1, 1) <= start <= date(9000, 1, 1):
+            raise _bad(422, "볼 수 없는 날짜입니다.")
         now = s.now()
         runner = s.runner.status()
         live = None
         if runner.get("kind") == "scheduled" and runner.get("slot_id") and runner.get("date"):
             live = (date.fromisoformat(runner["date"]), runner["slot_id"])
-        return build_week(cfg(), start or week_start(now.date()), now, live)
+        config = cfg()
+        return build_week(config, start or home_week_start(config, now.date()), now, live)
 
     # 방송 구성 ---------------------------------------------------------------
     def program_view(p: Program, config: Config) -> dict:
@@ -278,10 +281,15 @@ def create_app(services: Services) -> FastAPI:
         return slot.model_dump(mode="json")
 
     @app.delete("/api/slots/{slot_id}", status_code=204)
-    def delete_slot(slot_id: str):
+    def delete_slot(slot_id: str, with_program: bool = False):
+        """with_program이면 이 방송만 쓰던 방송 구성도 함께 지운다(새 방송 만들기는 둘을 같이 만든다)."""
+
         def mutate(c: Config):
-            c.slots.pop(_index(c.slots, slot_id, "회차"))
+            slot = c.slots.pop(_index(c.slots, slot_id, "회차"))
             c.overrides = [o for o in c.overrides if o.slot_id != slot_id]
+            still_used = any(sl.program_id == slot.program_id for sl in c.slots) or any(o.program_id == slot.program_id for o in c.overrides)
+            if with_program and not still_used:
+                c.programs = [p for p in c.programs if p.id != slot.program_id]
 
         update(mutate)
         return Response(status_code=204)
@@ -333,7 +341,7 @@ def create_app(services: Services) -> FastAPI:
         from .schedule import resolve_day
 
         now = s.now()
-        for offset in range(60):
+        for offset in range(NEXT_SEARCH_DAYS):
             day = now.date() + timedelta(days=offset)
             for occ in resolve_day(cfg(), day):
                 if occ.slot_id == slot_id and not occ.skipped and occ.at > now:
@@ -376,10 +384,24 @@ def create_app(services: Services) -> FastAPI:
     def list_days_off():
         return [d.model_dump(mode="json") for d in sorted(cfg().days_off, key=lambda d: d.start)]
 
+    def _check_change_not_past(override: Override) -> None:
+        """이미 나갔거나 놓친 회차를 다른 시각으로 옮기면 한 번 더 방송된다. 지난 시각으로 옮겨도 나가지 않는다."""
+        from .models import parse_hhmm
+        from .schedule import resolve_day
+
+        now = s.now()
+        current = next((o for o in resolve_day(cfg(), override.date) if o.slot_id == override.slot_id), None)
+        if current is not None and current.at <= now and not current.skipped:
+            raise _bad(409, "이미 지난 방송은 바꿀 수 없습니다.")
+        if override.time and datetime.combine(override.date, parse_hhmm(override.time)) <= now:
+            raise _bad(422, "이미 지난 시각입니다. 지금 이후 시각을 고르세요.")
+
     @app.put("/api/overrides")
     def put_override(body: dict = Body(...)):
         body.pop("id", None)
         override = Override.model_validate(body)
+        if override.action == "change":
+            _check_change_not_past(override)
 
         def mutate(c: Config):
             c.overrides = [o for o in c.overrides if not (o.date == override.date and o.slot_id == override.slot_id)]
@@ -418,7 +440,10 @@ def create_app(services: Services) -> FastAPI:
             raise _bad(404, "방송 구성을 찾을 수 없습니다.")
         if s.runner.on_air:
             raise _bad(409, "이미 방송 중입니다.")
-        s.runner.enqueue(Job(kind="manual", name=program.name, program=program))
+        try:
+            s.runner.enqueue(Job(kind="manual", name=program.name, program=program))
+        except RunnerBusy as exc:
+            raise _bad(409, str(exc)) from exc
         return {"ok": True}
 
     @app.post("/api/broadcast/stop")
@@ -481,15 +506,23 @@ def create_app(services: Services) -> FastAPI:
 
     @app.patch("/api/settings")
     def patch_settings(body: dict = Body(...)):
-        current = cfg().settings
-        new = Settings.model_validate({**current.model_dump(), **body})
-        if new.autostart != current.autostart:
-            try:
-                s.shell.set_autostart(new.autostart)
-            except OSError as exc:
-                raise _bad(500, f"자동 실행 설정을 바꾸지 못했습니다: {exc}") from exc
-        update(lambda c: setattr(c, "settings", new))
-        return new.model_dump(mode="json")
+        """바꾼 항목만 합친다. 동시에 온 요청이 서로의 변경을 지우지 않도록 저장 잠금 안에서 합친다."""
+        Settings.model_validate({**cfg().settings.model_dump(), **body})  # 먼저 형식 검사(잘못되면 422)
+        result: dict = {}
+
+        def mutate(c: Config):
+            before = c.settings
+            merged = Settings.model_validate({**before.model_dump(), **body})
+            if merged.autostart != before.autostart:
+                try:
+                    s.shell.set_autostart(merged.autostart)
+                except OSError as exc:
+                    raise _bad(500, f"자동 실행 설정을 바꾸지 못했습니다: {exc}") from exc
+            c.settings = merged
+            result.update(merged.model_dump(mode="json"))
+
+        update(mutate)
+        return result
 
     @app.post("/api/settings/reset")
     def reset_settings():
@@ -506,16 +539,24 @@ def create_app(services: Services) -> FastAPI:
         )
 
     @app.post("/api/import")
-    def import_config(body: dict = Body(...)):
+    def import_config(body: Any = Body(...)):
         from .storage import migrate
 
         try:
-            body = migrate(dict(body))
-        except ConfigError as exc:
+            body = migrate(body)
+        except (ConfigError, ValueError) as exc:
             raise _bad(422, str(exc)) from exc
         config = Config.model_validate(body)
+        if config.settings.autostart != cfg().settings.autostart:
+            try:
+                s.shell.set_autostart(config.settings.autostart)
+            except OSError as exc:
+                raise _bad(500, f"자동 실행 설정을 바꾸지 못했습니다: {exc}") from exc
         s.store.replace(config)
-        return {"ok": True}
+        # 소리 파일은 내보내기에 들어 있지 않다: 이 PC에 없는 파일을 알려 media 폴더를 옮기게 한다
+        have = {m["name"] for m in s.media.list()}
+        missing = sorted({st.file for p in config.programs for st in p.steps if st.kind == "audio" and st.file not in have})
+        return {"ok": True, "missing_files": missing}
 
     @app.post("/api/open-data-folder")
     def open_data_folder():

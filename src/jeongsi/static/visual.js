@@ -64,7 +64,17 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
   let lo = from, hi = to;
   const earlier = stepBtn("left", "1시간 일찍", () => set(minutes - 60), false, "−1시간");
   const later = stepBtn("right", "1시간 늦게", () => set(minutes + 60), false, "+1시간");
-  const timeText = h("span", { class: "tp-time" });
+  const timeText = h("input", {
+    class: "tp-time", inputmode: "numeric", maxlength: 5, "aria-label": "시각 입력 (예: 0850)", autocomplete: "off",
+    on: {
+      focus: (e) => e.target.select(),
+      keydown: (e) => {
+        if (e.key === "Enter") { e.preventDefault(); const m = parseTyped(e.target.value); if (m !== null) set(m, true, true); else e.target.value = toHHMM(minutes); }
+        if (e.key === "Escape") e.target.value = toHHMM(minutes);
+      },
+      blur: (e) => { const m = parseTyped(e.target.value); if (m !== null && m !== minutes) set(m, false, true); else if (m === null) e.target.value = toHHMM(minutes); },
+    },
+  });
   const display = h("div", { class: "tp-display" }, earlier, timeText, later); // 버튼을 다시 만들지 않아 초점이 남는다
   const pin = h("button", { class: "tp-pin", role: "slider", "aria-label": "시각", "aria-valuemin": 0, "aria-valuemax": 1435 });
   const tickBox = h("span", { class: "tp-ticks", "aria-hidden": "true" });
@@ -78,13 +88,13 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
       return h("span", { class: "tp-tick", style: { left: `${(i * 60 * 100) / (hi - lo)}%` } }, hour % every === 0 ? String(hour) : "");
     }));
   };
-  const set = (m, done = false) => {
-    minutes = Math.min(1435, Math.max(0, Math.round(m / 5) * 5));
+  const set = (m, done = false, exact = false) => {
+    minutes = Math.min(exact ? 1439 : 1435, Math.max(0, exact ? Math.round(m) : Math.round(m / 5) * 5)); // 직접 입력은 분 단위 그대로
     // 기본 눈금(6~22시) 밖의 시각이면 하루 전체로 넓혀 핀이 거짓 위치에 붙지 않게 한다(끄는 중에는 눈금 고정)
-    const [nlo, nhi] = minutes < from || minutes > to ? [0, 24 * 60] : [from, to];
+    const [nlo, nhi] = minutes < from || minutes > to || hi - lo === 24 * 60 ? [0, 24 * 60] : [from, to]; // 한 번 넓히면 그대로
     if (!dragging && (nlo !== lo || nhi !== hi || !painted)) { lo = nlo; hi = nhi; painted = true; ticks(); }
     const hhmm = toHHMM(minutes);
-    timeText.textContent = hhmm;
+    timeText.value = hhmm;
     earlier.disabled = minutes - 60 < 0;
     later.disabled = minutes + 60 > 1435;
     pin.style.left = `${((Math.min(hi, Math.max(lo, minutes)) - lo) * 100) / (hi - lo)}%`;
@@ -119,9 +129,21 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
     if (e.key === "End") { e.preventDefault(); set(1435); }
     if (e.key === "Enter") { e.preventDefault(); onChange(toHHMM(minutes), true); }
   });
-  const wrap = h("div", { class: "tp" }, display, h("div", { class: "tp-scale" }, icon("sun"), track, icon("moon")));
+  const wrap = h("div", { class: "tp" }, display, h("div", { class: "tp-scale" }, track));
   set(minutes);
   return wrap;
+}
+
+// "0850", "850", "8:50", "08:50", "8" → 분. 알아볼 수 없으면 null
+export function parseTyped(text) {
+  const t = String(text).trim().replace(/[.,\s]/g, ":");
+  let hh, mm;
+  if (/^\d{1,2}:\d{1,2}$/.test(t)) [hh, mm] = t.split(":").map(Number);
+  else if (/^\d{3,4}$/.test(t)) { hh = Number(t.slice(0, -2)); mm = Number(t.slice(-2)); }
+  else if (/^\d{1,2}$/.test(t)) { hh = Number(t); mm = 0; }
+  else return null;
+  if (hh > 23 || mm > 59) return null;
+  return hh * 60 + mm;
 }
 
 function stepBtn(dir, label, fn, disabled, text) {
@@ -305,7 +327,7 @@ export function dayRuler(times, nowMinutes, nextTime) {
 let openPop = null;
 export function popover(anchor, content) {
   closePopover();
-  const pop = h("div", { class: "pop", role: "dialog" }, content);
+  const pop = h("div", { class: "pop", role: "dialog", tabindex: "-1" }, content);
   document.body.append(pop);
   const r = anchor.getBoundingClientRect();
   const pr = pop.getBoundingClientRect();
@@ -318,11 +340,22 @@ export function popover(anchor, content) {
   // 닫힌 팝오버의 처리기가 남아 새 팝오버를 닫지 않도록, 지금 열린 팝오버일 때만 반응한다
   let alive = true;
   const onDoc = (e) => { if (openPop?.pop === pop && !pop.contains(e.target) && !anchor.contains(e.target)) closePopover(); };
-  const onKey = (e) => { if (openPop?.pop === pop && e.key === "Escape") { closePopover(); anchor.focus(); } };
+  const onKey = (e) => {
+    if (openPop?.pop !== pop) return;
+    if (e.key === "Escape") { closePopover(); anchor.focus(); return; }
+    if (e.key === "Tab") { // 팝오버 안에서만 돈다(밖으로 빠지면 문서 끝으로 사라진다)
+      const items = [...pop.querySelectorAll("button:not([disabled]), input, [tabindex='0']")];
+      if (!items.length) return;
+      const i = items.indexOf(document.activeElement);
+      e.preventDefault();
+      items[(i + (e.shiftKey ? -1 : 1) + items.length) % items.length].focus();
+    }
+  };
   setTimeout(() => { if (alive) document.addEventListener("pointerdown", onDoc); }, 0);
   document.addEventListener("keydown", onKey);
   openPop = { pop, cleanup: () => { alive = false; document.removeEventListener("pointerdown", onDoc); document.removeEventListener("keydown", onKey); } };
-  pop.querySelector("button")?.focus();
+  // 첫 버튼(예: '지금')에 초점을 두면 Enter 두 번에 실행되므로 팝오버 자체에 둔다
+  pop.focus();
   return pop;
 }
 

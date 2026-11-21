@@ -83,3 +83,32 @@ def test_weekend_column_appears_for_date_in_that_week():
     cfg.slots.append(Slot(name="행사", time="10:00", dates=[date(2026, 11, 21)], program_id="p1"))
     assert visible_weekdays(cfg, MON) == [0, 1, 2, 3, 4, 5]
     assert visible_weekdays(cfg, date(2026, 11, 23)) == [0, 1, 2, 3, 4]
+
+
+def test_disabled_slot_is_shown_greyed_so_it_can_be_turned_back_on():
+    # Arrange: 점심(s1)을 꺼 둠
+    cfg = make_config()
+    cfg.slots[0].enabled = False
+    # Act
+    week = build_week(cfg, MON, datetime(2026, 11, 16, 7, 0), None)
+    # Assert
+    row = next(r for r in week["rows"] if r["slot"]["id"] == cfg.slots[0].id)
+    statuses = {c["status"] for c in row["cells"] if c["date"] in {"2026-11-16", "2026-11-17"}}
+    assert statuses == {"disabled"}
+    assert row["cells"][0]["time"] == cfg.slots[0].time
+
+
+def test_home_week_skips_to_next_week_on_an_empty_weekend():
+    from jeongsi.timetable import home_week_start
+
+    cfg = make_config()  # 평일 방송만
+    assert home_week_start(cfg, date(2026, 11, 21)) == date(2026, 11, 23)  # 토요일 → 다음 주
+    assert home_week_start(cfg, date(2026, 11, 20)) == date(2026, 11, 16)  # 금요일 → 이번 주
+
+
+def test_home_week_stays_when_weekend_has_a_broadcast():
+    from jeongsi.timetable import home_week_start
+
+    cfg = make_config()
+    cfg.slots[0].weekdays = [0, 1, 2, 3, 4, 5]
+    assert home_week_start(cfg, date(2026, 11, 21)) == date(2026, 11, 16)

@@ -154,11 +154,15 @@ class Slot(_Model):
     def active_on(self, day: date) -> bool:
         return (self.start_date is None or day >= self.start_date) and (self.end_date is None or day <= self.end_date)
 
-    def occurs_on(self, day: date) -> bool:
-        """그 날 방송하는 회차인지(켜짐·요일 또는 날짜·기간)."""
-        if not self.enabled or not self.active_on(day):
+    def matches(self, day: date) -> bool:
+        """켜짐 여부와 관계없이 그 날이 이 회차의 날인지(요일 또는 날짜·기간)."""
+        if not self.active_on(day):
             return False
         return day in self.dates if self.dates else day.weekday() in self.weekdays
+
+    def occurs_on(self, day: date) -> bool:
+        """그 날 방송하는 회차인지(켜짐·요일 또는 날짜·기간)."""
+        return self.enabled and self.matches(day)
 
 
 class DayOff(_Model):
@@ -230,7 +234,7 @@ class Config(_Model):
     def _check_references(self) -> Config:
         program_ids = {p.id for p in self.programs}
         slot_ids = {s.id for s in self.slots}
-        for group, ids in (("방송 구성", [p.id for p in self.programs]), ("회차", [s.id for s in self.slots])):
+        for group, ids in (("방송 구성", [p.id for p in self.programs]), ("회차", [s.id for s in self.slots]), ("쉬는 날", [d.id for d in self.days_off])):
             if len(ids) != len(set(ids)):
                 raise ValueError(f"{group} id가 중복되었습니다.")
         for slot in self.slots:

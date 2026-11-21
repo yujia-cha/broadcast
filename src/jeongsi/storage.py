@@ -35,9 +35,13 @@ def atomic_write_text(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def migrate(raw: dict) -> dict:
-    """이전 형식의 설정을 현재 형식으로 바꾼다. 현재는 v1뿐이다."""
+def migrate(raw: object) -> dict:
+    """이전 형식의 설정을 현재 형식으로 바꾼다. 현재는 v1뿐이다. 모양이 틀리면 ValueError."""
+    if not isinstance(raw, dict):
+        raise ValueError("설정 파일의 최상위가 객체가 아닙니다.")
     version = raw.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise ValueError("설정 파일의 버전 표시가 올바르지 않습니다.")
     if version > SCHEMA_VERSION:
         raise ConfigError("새 버전의 앱에서 만든 설정 파일입니다. 앱을 최신 버전으로 업데이트하세요.")
     raw["schema_version"] = SCHEMA_VERSION
@@ -92,7 +96,7 @@ class ConfigStore:
             return Config.model_validate(migrate(raw))
         except ConfigError:
             raise
-        except (OSError, ValueError, ValidationError) as exc:
+        except (OSError, ValueError, TypeError, AttributeError, ValidationError) as exc:
             backup = self._path.with_name(f"config.broken-{datetime.now():%Y%m%d-%H%M%S}.json")
             try:
                 os.replace(self._path, backup)

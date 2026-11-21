@@ -124,3 +124,37 @@ def test_queued_job_check_sees_later_skip_and_auto_off(tmp_path):
     store.update(lambda c: setattr(c, "overrides", []))
     store.update(lambda c: setattr(c.settings, "auto_broadcast", False))
     assert check() is False
+
+
+def test_broadcast_created_after_its_time_does_not_fire(tmp_path):
+    # Arrange: 1초마다 확인하는 중에, 08:00:05에 '08:00' 회차가 생긴다(화면에는 '지남')
+    sched, store, clock, jobs = make(tmp_path, datetime(2026, 11, 20, 8, 0, 3))
+    sched.tick()
+    clock.at = datetime(2026, 11, 20, 8, 0, 4)
+    sched.tick()
+    store.update(lambda c: setattr(c.slots[0], "time", "08:00"))
+    # Act
+    clock.at = datetime(2026, 11, 20, 8, 0, 5)
+    sched.tick()
+    # Assert
+    assert jobs == []
+
+
+def test_broadcast_seen_before_its_time_still_fires_after_short_delay(tmp_path):
+    # Arrange: 11:59:58에 미리 봐 둔 12:00 방송
+    sched, _, clock, jobs = make(tmp_path, datetime(2026, 11, 20, 11, 59, 58))
+    sched.tick()
+    # Act: 2초 뒤 확인(정상 간격)
+    clock.at = datetime(2026, 11, 20, 12, 0, 1)
+    sched.tick()
+    # Assert
+    assert [j.slot_id for j in jobs] == ["lunch"]
+
+
+def test_resume_after_sleep_fires_within_grace(tmp_path):
+    # 11:00에 확인하고 절전, 12:00:30에 깨어나면 유예 안이므로 내보낸다
+    sched, _, clock, jobs = make(tmp_path, datetime(2026, 11, 20, 11, 0, 0))
+    sched.tick()
+    clock.at = datetime(2026, 11, 20, 12, 0, 30)
+    sched.tick()
+    assert [j.slot_id for j in jobs] == ["lunch"]

@@ -254,3 +254,14 @@ def test_relaunch_env_drops_pyinstaller_state_and_keeps_the_rest():
 
 def test_relaunch_env_with_empty_environment_still_resets():
     assert relaunch_env({}) == {"PYINSTALLER_RESET_ENVIRONMENT": "1"}
+
+
+def test_check_while_downloading_keeps_state(tmp_path):
+    # Arrange: 받는 중
+    up = Updater("0.1.0", opener=lambda url, timeout=15.0: (_ for _ in ()).throw(AssertionError("네트워크를 쓰면 안 됨")))
+    up._release = ReleaseInfo("9.0.0", "", "", "", "a", "b")
+    up.mark_downloading()
+    # Act
+    result = up.check()
+    # Assert: 상태가 available로 돌아가면 중복 적용 막기가 풀린다
+    assert result.version == "9.0.0" and up.status()["state"] == "downloading"

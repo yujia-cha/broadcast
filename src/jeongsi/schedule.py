@@ -77,7 +77,10 @@ def occurrences_between(config: Config, start: datetime, end: datetime) -> Itera
         day += timedelta(days=1)
 
 
-def next_occurrence(config: Config, now: datetime, search_days: int = 60) -> Occurrence | None:
+NEXT_SEARCH_DAYS = 400  # 몇 달 뒤의 특정 날짜도 '다음 방송'으로 보이게
+
+
+def next_occurrence(config: Config, now: datetime, search_days: int = NEXT_SEARCH_DAYS) -> Occurrence | None:
     """now 이후 첫 방송. 쉬는 회차는 건너뛴다."""
     for offset in range(search_days + 1):
         day = now.date() + timedelta(days=offset)

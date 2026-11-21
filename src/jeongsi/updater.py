@@ -116,7 +116,13 @@ class Updater:
 
     # 확인 ------------------------------------------------------------------
     def check(self) -> ReleaseInfo | None:
-        """최신 정식 릴리즈가 현재보다 새 버전이면 돌려준다. 네트워크 오류는 UpdateError."""
+        """최신 정식 릴리즈가 현재보다 새 버전이면 돌려준다. 네트워크 오류는 UpdateError.
+
+        받는 중이거나 적용을 기다리는 중이면 상태를 건드리지 않는다(되돌리면 같은 파일을 두 번 받게 된다).
+        """
+        with self._lock:
+            if self._state.get("state") in ("downloading", "ready"):
+                return self._release
         self._set(state="checking")
         try:
             with self._open(self._feed_url) as resp:
