@@ -53,13 +53,27 @@ def test_change_override_moves_time_and_reorders(config):
     assert lunch.changed and lunch.time == time(17, 0) and lunch.original_time == time(12, 0)
 
 
-def test_change_override_wins_over_day_off(config):
-    # 쉬는 기간이어도 그 날짜 회차를 바꾸기로 지정하면 방송한다
+def test_forced_change_wins_over_day_off(config):
+    # 쉬는 기간이어도 '이번만 켜기'(force)로 지정하면 방송한다
     config.days_off = [DayOff(start=MON, end=FRI)]
-    config.overrides = [Override(date=FRI, slot_id="lunch", action="change", program_id="p2")]
+    config.overrides = [Override(date=FRI, slot_id="lunch", action="change", program_id="p2", force=True)]
     occs = {o.slot_id: o for o in resolve_day(config, FRI)}
     assert not occs["lunch"].skipped and occs["lunch"].program_id == "p2"
     assert occs["morning"].skipped
+
+
+def test_time_change_made_before_day_off_is_skipped_by_day_off(config):
+    # 그 날만 시각을 옮겨 둔 뒤 쉬는 날을 정하면 쉰다(옮긴 시각은 그대로 보여 준다)
+    config.overrides = [Override(date=FRI, slot_id="lunch", action="change", time="12:30")]
+    config.days_off = [DayOff(start=FRI, end=FRI)]
+    lunch = {o.slot_id: o for o in resolve_day(config, FRI)}["lunch"]
+    assert lunch.skipped and lunch.time.strftime("%H:%M") == "12:30"
+
+
+def test_skip_keeps_shown_time_of_earlier_change(config):
+    config.overrides = [Override(date=FRI, slot_id="lunch", action="skip", time="12:20")]
+    lunch = {o.slot_id: o for o in resolve_day(config, FRI)}["lunch"]
+    assert lunch.skipped and lunch.time.strftime("%H:%M") == "12:20" and lunch.changed
 
 
 def test_override_on_day_without_slot_is_ignored(config):

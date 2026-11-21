@@ -67,6 +67,17 @@ export function icon(name) {
 // 알림 -------------------------------------------------------------------------
 let toastTimer;
 /** action: { label, fn } — 토스트 안에 되돌리기 같은 버튼 하나를 둔다 */
+// 한국어 조사: 마지막 글자의 받침으로 고른다(한글이 아니면 숫자 읽기 대신 뒤쪽 형태)
+export function josa(word, pair) {
+  const [withFinal, withoutFinal] = pair.split("/");
+  const last = String(word).trim().replace(/['"’”)\]\s]+$/, "").slice(-1); // 따옴표·괄호 앞 글자로 판단
+  const code = last.charCodeAt(0) - 0xac00;
+  if (code < 0 || code > 11171) return `${word}${withoutFinal}`;
+  const final = code % 28;
+  if (pair === "으로/로" && final === 8) return `${word}로`; // ㄹ받침은 '로'
+  return `${word}${final ? withFinal : withoutFinal}`;
+}
+
 export function toast(message, { error = false, action = null } = {}) {
   const el = document.getElementById("toast");
   // 모달 대화상자가 열려 있으면 그 위(최상위 층)에 보이도록 대화상자 안으로 옮긴다
@@ -90,12 +101,15 @@ export function toastError(err) {
 // 대화상자 ----------------------------------------------------------------------
 /** build(close)가 돌려준 요소를 모달로 띄운다. 닫히면 DOM에서 지운다. */
 export function openDialog(label, build) {
+  const opener = document.activeElement;
   const dialog = h("dialog", { "aria-label": label });
   const close = (value) => {
     const toastEl = dialog.querySelector("#toast"); // 대화상자 위에 띄웠던 알림은 지우지 않고 본문으로 돌려놓는다
     if (toastEl) document.body.append(toastEl);
     if (dialog.open) dialog.close();
     dialog.remove();
+    const target = opener?.isConnected && opener !== document.body ? opener : document.getElementById("view");
+    target?.focus?.({ preventScroll: true });
     resolver?.(value);
   };
   let resolver;

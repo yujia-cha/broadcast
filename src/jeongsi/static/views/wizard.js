@@ -1,7 +1,7 @@
 // 새 방송 만들기: 질문 하나씩, 그림을 눌러 답한다. 답하면 다음 칸이 위에 나타나고 답한 칸은 아래에 쌓인다.
 // 마지막에 티켓 모양 요약을 확인하면 방송 구성과 회차를 한 번에 만든다.
 import { api, get, post } from "../api.js";
-import { addDays, confirmDialog, fmtDate, h, icon, toast, toastError, weekdaySummary } from "../ui.js";
+import { josa, addDays, confirmDialog, fmtDate, h, icon, toast, toastError, weekdaySummary } from "../ui.js";
 import { countPicker, dateChips, dayDots, mediaPicker, multiDateCalendar, strip, timePicker, weekdayPicker } from "../visual.js";
 
 let ctx, root, st;
@@ -238,7 +238,7 @@ function fileField(d) {
       const m = await api("POST", "/api/media", form);
       await ctx.loadMedia();
       d.file = m.name;
-      toast(`${m.display}을(를) 올렸습니다.`);
+      toast(`${josa(m.display, "을/를")} 올렸습니다.`);
       next();
     } catch (err) {
       toastError(err);

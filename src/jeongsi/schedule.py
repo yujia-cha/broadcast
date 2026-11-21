@@ -45,10 +45,14 @@ def resolve_day(config: Config, day: date) -> list[Occurrence]:
         when, program_id, skipped, changed = base_time, slot.program_id, False, False
         if override is not None and override.action == "skip":
             skipped = True
+            if override.time:  # 끄기 전에 바꿔 둔 시각을 그대로 보여 준다
+                when = parse_hhmm(override.time)
+                changed = when != base_time
         elif override is not None and override.action == "change":
             when = parse_hhmm(override.time) if override.time else base_time
             program_id = override.program_id or slot.program_id
             changed = True
+            skipped = day_off is not None and not override.force  # 쉬는 날은 '이번만 켜기'만 이긴다
         elif day_off is not None:
             skipped = True
         result.append(

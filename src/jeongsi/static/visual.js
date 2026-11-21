@@ -62,15 +62,18 @@ export const toHHMM = (m) => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
 export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}) {
   let minutes = toMinutes(value) ?? 12 * 60;
   let lo = from, hi = to;
-  const earlier = stepBtn("left", "1시간 일찍", () => set(minutes - 60), false, "−1시간");
-  const later = stepBtn("right", "1시간 늦게", () => set(minutes + 60), false, "+1시간");
+  const earlier = stepBtn("left", "1시간 일찍", () => set(minutes - 60, false, true), false, "−1시간");
+  const later = stepBtn("right", "1시간 늦게", () => set(minutes + 60, false, true), false, "+1시간");
   const timeText = h("input", {
     class: "tp-time", inputmode: "numeric", maxlength: 5, "aria-label": "시각 입력 (예: 0850)", autocomplete: "off",
     on: {
       focus: (e) => e.target.select(),
       keydown: (e) => {
         if (e.key === "Enter") { e.preventDefault(); const m = parseTyped(e.target.value); if (m !== null) set(m, true, true); else e.target.value = toHHMM(minutes); }
-        if (e.key === "Escape") e.target.value = toHHMM(minutes);
+        if (e.key === "Escape") { // 입력만 되돌린다(마법사의 '그만할까요?'로 넘기지 않음)
+          e.preventDefault();
+          if (e.target.value !== toHHMM(minutes)) { e.stopPropagation(); e.target.value = toHHMM(minutes); }
+        }
       },
       blur: (e) => { const m = parseTyped(e.target.value); if (m !== null && m !== minutes) set(m, false, true); else if (m === null) e.target.value = toHHMM(minutes); },
     },
@@ -124,7 +127,7 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
   });
   pin.addEventListener("keydown", (e) => {
     const step = { ArrowRight: 5, ArrowUp: 5, ArrowLeft: -5, ArrowDown: -5, PageUp: 60, PageDown: -60 }[e.key];
-    if (step) { e.preventDefault(); set(minutes + step); }
+    if (step) { e.preventDefault(); set(minutes + step, false, true); }
     if (e.key === "Home") { e.preventDefault(); set(0); }
     if (e.key === "End") { e.preventDefault(); set(1435); }
     if (e.key === "Enter") { e.preventDefault(); onChange(toHHMM(minutes), true); }

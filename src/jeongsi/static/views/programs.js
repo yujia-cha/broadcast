@@ -1,7 +1,7 @@
 // 방송 구성: 음성(말풍선)·음악(음표) 블록을 이어 붙인 띠를 직접 만진다.
 // 블록을 끌어 순서를 바꾸고, 누르면 아래에서 그 블록을 고친다.
 import { api, del, post, put } from "../api.js";
-import { confirmDialog, fmtDuration, h, icon, openDialog, toast, toastError } from "../ui.js";
+import { josa, confirmDialog, fmtDuration, h, icon, openDialog, toast, toastError } from "../ui.js";
 import { countPicker, iconAction, mediaPicker, strip } from "../visual.js";
 
 const TTS_CHARS_PER_SECOND = 7;
@@ -112,6 +112,13 @@ function renderEditor() {
 }
 
 // 블록 띠: 끌어서 순서 바꾸기, 눌러서 고르기 ----------------------------------------------------
+function refreshSummary() {
+  const d = st.draft;
+  editorEl.querySelector(".track")?.replaceWith(blockTrack(d));
+  const total = d.steps.reduce((a, s) => a + estimate(s) * s.repeat + s.gap_sec * (s.repeat - 1), 0);
+  editorEl.querySelector(".pg-total")?.replaceChildren(icon("clock"), fmtDuration(total));
+}
+
 function blockTrack(d) {
   const track = h("div", { class: "track", role: "listbox", "aria-label": "순서", "aria-orientation": "horizontal" });
   d.steps.forEach((step, i) => {
@@ -185,7 +192,8 @@ function ttsBody(step) {
   return h("div", { class: "wz-stack" },
     h("textarea", {
       class: "input wz-input", rows: 3, maxlength: 2000, placeholder: "읽어 줄 문구", "aria-label": "읽어 줄 문구", value: step.text,
-      on: { input: (e) => { step.text = e.target.value; }, change: () => renderEditor() },
+      // 글자를 바꿀 때 화면 전체를 다시 그리면, 바로 누른 '저장'이 사라져 첫 클릭이 무시된다: 띠와 총 시간만 바꾼다
+      on: { input: (e) => { step.text = e.target.value; refreshSummary(); } },
     }),
     h("div", { class: "sp-row" },
       h("div", { class: "seg-pick", role: "radiogroup", "aria-label": "빠르기" },
@@ -351,7 +359,7 @@ function openMediaDialog() {
       await ctx.loadMedia();
       paint();
       renderList();
-      toast(`${m.display}을(를) 올렸습니다.`);
+      toast(`${josa(m.display, "을/를")} 올렸습니다.`);
     } catch (err) {
       errEl.textContent = err.message;
     } finally {

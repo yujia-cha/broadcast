@@ -192,6 +192,8 @@ class Override(_Model):
     action: Literal["skip", "change"]
     time: str | None = None
     program_id: str | None = None
+    # 쉬는 날에도 이 회차만 내보낸다('이번만 켜기'). 없으면 쉬는 날이 이긴다
+    force: bool = False
 
     @field_validator("time")
     @classmethod

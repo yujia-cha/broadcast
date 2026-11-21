@@ -1,7 +1,7 @@
 // 시간표: 요일 열에 시각 위치로 방송 블록을 놓는다.
 // 블록을 위아래로 끌면 그 날만 시각이 바뀌고, 누르면 아이콘 버튼이 나온다. 요일 머리를 누르면 그 날을 쉰다.
 import { del, get, post, put } from "../api.js";
-import {
+import { josa,
   addDays, confirmDialog, fmtClock, fmtDate, fmtDuration, fmtIn, fmtMonthDay, fmtWeekTitle, h, icon, openDialog, toast, toastError,
 } from "../ui.js";
 import {
@@ -112,6 +112,13 @@ function hourRange(rows) {
 }
 
 function renderGrid() {
+  // 매분 다시 그려도 키보드 초점이 블록에 남도록 같은 블록을 다시 찾아 초점을 준다
+  const focused = mainEl.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+  drawGrid();
+  if (focused) mainEl.querySelector(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+}
+
+function drawGrid() {
   const w = st.week;
   const isThisWeek = w.start === w.home;
   const bar = h("div", { class: "weekbar" },
@@ -224,14 +231,15 @@ function block(row, cell, from, index, count) {
   const bh = blockPx();
   const top = ((toMinutes(cell.time) - from) / 60) * st.hourPx - bh / 2;
   const el = h("button", {
-    class: `cblock ${cell.status}${cell.changed && cell.status !== "off" ? " chg" : ""}${bh < 44 ? " compact" : ""}`,
+    class: `cblock ${cell.status}${cell.changed && cell.status !== "off" ? " chg" : ""}${bh < 44 || count >= 3 ? " compact" : ""}${count >= 4 ? " tight" : ""}`,
+    title: `${cell.time} ${row.slot.name}`,
+    "data-key": `${row.slot.id}|${cell.date}`,
     style: { top: `${top}px`, height: `${bh}px`, left: `calc(${(index * 100) / count}% + 3px)`, width: `calc(${100 / count}% - 6px)` },
     "aria-label": `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}, ${statusWord(cell)}`,
   },
     h("span", { class: "cb-top" },
       h("b", { class: "cb-time" }, cell.time),
       cell.status === "off" ? icon(cell.override?.action === "skip" ? "ban" : "calendarOff")
-        : cell.status === "disabled" ? icon("ban")
         : cell.status === "live" ? h("span", { class: "dot" }) : null,
     ),
     h("span", { class: "cb-name" }, row.slot.name),
@@ -313,16 +321,16 @@ function blockPopover(anchor, row, cell) {
   st.openCell = { slotId: row.slot.id, date: cell.date, status: cell.status, time: cell.time };
   const past = ["past", "live"].includes(cell.status);
   const offByOverride = cell.status === "off" && cell.override?.action === "skip";
-  const offByDay = cell.status === "off" && !cell.override;
+  const offByDay = cell.status === "off" && !offByOverride; // 쉬는 날(그 날 시각을 옮겨 둔 회차 포함)
   const program = ctx.programs.find((p) => p.id === cell.program_id);
   const actions = [];
   if (program) actions.push(iconAction("play", "지금", () => broadcastNow(program.id, row.slot.name)));
   if (!past) {
     if (offByOverride) actions.push(iconAction("undo", "되살리기", () => revive(row, cell)));
-    else if (offByDay) actions.push(iconAction("check", "이번만 켜기", () => setOverride(row, cell, { action: "change", time: cell.time }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}만 방송합니다.`)));
+    else if (offByDay) actions.push(iconAction("check", "이번만 켜기", () => setOverride(row, cell, { action: "change", time: cell.time, program_id: cell.program_id, force: true }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}만 방송합니다.`, true)));
     else {
       // 끄기 전에 바꿔 둔 시각·구성(또는 쉬는 날 '이번만 켜기')을 함께 남겨 '되살리기'로 그대로 돌아오게 한다
-      const keep = cell.override?.action === "change" ? { time: cell.time, program_id: cell.program_id } : {};
+      const keep = cell.override?.action === "change" ? { time: cell.time, program_id: cell.program_id, force: cell.override.force } : {};
       actions.push(iconAction("ban", "이번만 끄기", () => setOverride(row, cell, { action: "skip", ...keep }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name} 끔`, true)));
     }
     if (!offByOverride && !offByDay) actions.push(iconAction("clock", "이 날만 시각", () => timeEditor(anchor, row, cell)));
@@ -371,7 +379,7 @@ async function setEnabled(slot, enabled) {
     await put(`/api/slots/${slot.id}`, { ...slot, enabled });
     closePopover();
     await loadWeek();
-    toast(enabled ? `${slot.name}을(를) 다시 켰습니다.` : `${slot.name}을(를) 껐습니다.`,
+    toast(enabled ? `${josa(slot.name, "을/를")} 다시 켰습니다.` : `${josa(slot.name, "을/를")} 껐습니다.`,
       { action: { label: "되돌리기", fn: () => setEnabled({ ...slot, enabled }, !enabled) } });
   } catch (err) {
     toastError(err);
@@ -384,7 +392,7 @@ async function revive(row, cell) {
   const dayOff = st.week?.days.find((d) => d.date === cell.date)?.day_off;
   try {
     if (ov.time || ov.program_id || dayOff) {
-      await put("/api/overrides", { date: cell.date, slot_id: row.slot.id, action: "change", time: ov.time || cell.original_time, program_id: ov.program_id || null });
+      await put("/api/overrides", { date: cell.date, slot_id: row.slot.id, action: "change", time: ov.time || cell.original_time, program_id: ov.program_id || null, force: !!(ov.force || dayOff) });
     } else {
       await del(`/api/overrides/${cell.date}/${row.slot.id}`);
     }
@@ -509,7 +517,7 @@ function undoChip(skip) {
 function todayOf(week) {
   const i = week.days.findIndex((d) => d.date === todayIso());
   if (i < 0) return [];
-  return week.rows.map((r) => r.cells[i]).filter((c) => c.time && c.status !== "off");
+  return week.rows.map((r) => r.cells[i]).filter((c) => c.time && c.status !== "off" && c.status !== "disabled");
 }
 
 const todayCells = () => st.today || [];
@@ -517,7 +525,7 @@ const todayCells = () => st.today || [];
 async function broadcastNow(programId, name) {
   closePopover();
   // 스피커로 바로 나가는 일이므로 한 번 묻는다(예약된 방송은 그대로 나간다)
-  if (!(await confirmDialog({ title: `'${name}'을(를) 지금 방송할까요?`, message: "다른 소리를 잠시 멈추고 바로 내보냅니다.", confirm: "지금 방송" }))) return;
+  if (!(await confirmDialog({ title: `${josa(`'${name}'`, "을/를")} 지금 방송할까요?`, message: "다른 소리를 잠시 멈추고 바로 내보냅니다.", confirm: "지금 방송" }))) return;
   try {
     await post("/api/broadcast", { program_id: programId });
     toast("방송을 시작합니다.");
@@ -644,7 +652,13 @@ export function openSlotDialog(slot) {
           (stripBox = h("span")),
           (progEl = h("select", { class: "input", "aria-label": "방송 내용", on: { change: paintStrip } },
             ctx.programs.map((p) => h("option", { value: p.id, selected: p.id === draft.program_id }, p.name)))),
-          h("button", { type: "button", class: "btn sm", on: { click: () => { close(); ctx.selectProgramId = progEl.value; ctx.go("programs"); } } }, icon("edit"), "내용 바꾸기"),
+          h("button", { type: "button", class: "btn sm", on: { click: async () => {
+            const dirty = nameEl.value.trim() !== slot.name || draft.time !== slot.time || enabledEl.checked !== slot.enabled
+              || progEl.value !== slot.program_id || JSON.stringify([mode === "weekly" ? draft.weekdays : draft.dates, draft.start_date, draft.end_date])
+                !== JSON.stringify([mode === "weekly" ? slot.weekdays : slot.dates || [], slot.start_date, slot.end_date]);
+            if (dirty && !(await confirmDialog({ title: "고친 내용을 저장하지 않고 이동할까요?", message: "이름·시각·반복에서 바꾼 것은 사라집니다.", confirm: "이동", danger: true }))) return;
+            close(); ctx.selectProgramId = progEl.value; ctx.go("programs");
+          } } }, icon("edit"), "내용 바꾸기"),
         )),
       (errEl = h("p", { class: "err", role: "alert" })),
       (confirmBox = h("div", { hidden: true })),
@@ -682,7 +696,7 @@ export function openSlotDialog(slot) {
     const key = `${body.time}|${body.weekdays.join(",")}|${body.dates.join(",")}`;
     if (clash.length && overlapConfirmed !== key) {
       overlapConfirmed = key;
-      errEl.textContent = `같은 시각(${body.time})에 '${clash.map((s) => s.name).join("', '")}'이(가) 있어 이어서 방송돼요. 한 번 더 누르면 저장합니다.`;
+      errEl.textContent = `같은 시각(${body.time})에 ${josa(`'${clash.map((s) => s.name).join("', '")}'`, "이/가")} 있어 이어서 방송돼요. 한 번 더 누르면 저장합니다.`;
       return;
     }
     try {
@@ -725,7 +739,7 @@ async function openDaysOffDialog(prefill) {
     try {
       items = await get("/api/days-off");
       list.replaceChildren(...items.map((d) =>
-        h("span", { class: "off-chip" }, icon("ban"),
+        h("span", { class: "off-chip" }, icon("calendarOff"),
           `${fmtMonthDay(d.start)}${d.start === d.end ? "" : `~${fmtMonthDay(d.end)}`}${d.memo ? ` ${d.memo}` : ""}`,
           h("button", { class: "off-x", "aria-label": `${fmtMonthDay(d.start)}${d.start === d.end ? "" : `~${fmtMonthDay(d.end)}`}${d.memo ? ` ${d.memo}` : ""} 삭제`, on: { click: async () => {
             try {

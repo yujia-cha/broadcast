@@ -24,6 +24,15 @@ async function main() {
     console.log("ok");
   };
   const toast = (text) => page.waitForSelector(`#toast.show >> text=${text}`);
+  // 시간표는 매분 다시 그려진다: 그 순간에 걸린 동작은 한 번 더 시도한다
+  const retry = async (fn, times = 3) => {
+    for (let i = 0; ; i++) {
+      try { return await fn(); } catch (err) {
+        if (i >= times - 1 || !/not attached|detached/i.test(String(err))) throw err;
+        await page.waitForTimeout(400);
+      }
+    }
+  };
 
   try {
     await step("첫 화면: 빈 달력과 새 방송 버튼", async () => {
@@ -107,7 +116,7 @@ async function main() {
 
     await step("블록을 끌어 오늘만 시각 바꾸기", async () => {
       const blk = page.locator(".cal-col.today .cblock.next");
-      await blk.scrollIntoViewIfNeeded();
+      await retry(() => blk.scrollIntoViewIfNeeded());
       const box = await blk.boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.down();
@@ -126,7 +135,7 @@ async function main() {
 
     await step("살짝 흔들린 클릭은 시각을 바꾸지 않음", async () => {
       const blk = page.locator(".cal-col.today .cblock.chg");
-      await blk.scrollIntoViewIfNeeded();
+      await retry(() => blk.scrollIntoViewIfNeeded());
       const box = await blk.boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.down();
@@ -212,6 +221,9 @@ async function main() {
       await page.click(".step-panel .ia >> text=복제");
       if ((await page.locator(".tblk").count()) !== 3) throw new Error("복제가 되지 않았습니다");
       await page.click(".step-panel .ia >> text=빼기");
+      // 문구를 고친 직후 '저장'을 한 번만 눌러도 저장돼야 한다(첫 클릭이 무시되던 문제)
+      await page.locator(".tblk").first().click();
+      await page.fill(".step-panel textarea", "점심시간입니다. 식당으로 오세요.");
       await page.click(".editor-foot >> text=저장");
       await toast("저장했습니다.");
       await shot("06-program");
@@ -317,7 +329,7 @@ async function main() {
       await page.click(".nav >> text=시간표");
       const a = page.locator('.cal-col.today .cblock[aria-label*="겹침 가"]');
       const b = page.locator('.cal-col.today .cblock[aria-label*="겹침 나"]');
-      await a.scrollIntoViewIfNeeded();
+      await retry(() => a.scrollIntoViewIfNeeded());
       const [ra, rb] = [await a.boundingBox(), await b.boundingBox()];
       const overlap = ra.x < rb.x + rb.width && rb.x < ra.x + ra.width && ra.y < rb.y + rb.height && rb.y < ra.y + ra.height;
       if (overlap) throw new Error("가까운 블록이 서로 덮습니다");
@@ -329,10 +341,7 @@ async function main() {
 
     await step("블록에서 Enter 두 번: 바로 방송되지 않음", async () => {
       const blk = page.locator('.cal-col.today .cblock[aria-label*="점심 방송"]');
-      await blk.scrollIntoViewIfNeeded();
-      await blk.focus();
-      await page.keyboard.press("Enter");
-      await page.waitForSelector(".pop");
+      await retry(async () => { await blk.scrollIntoViewIfNeeded(); await blk.focus(); await page.keyboard.press("Enter"); await page.waitForSelector(".pop", { timeout: 2000 }); });
       await page.keyboard.press("Enter");
       await page.waitForTimeout(300);
       if (await page.locator("dialog[open]").count()) throw new Error("Enter 두 번에 확인 창이 떴습니다");

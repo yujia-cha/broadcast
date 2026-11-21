@@ -555,3 +555,22 @@ def test_next_finds_a_specific_date_months_ahead(env):
     body = {"name": "졸업식", "steps": [{"kind": "tts", "text": "안내"}], "time": "10:00", "dates": ["2027-02-20"]}
     assert client.post("/api/broadcasts", json=body, headers=HEADERS).json()["next"] == {"date": "2027-02-20", "time": "10:00"}
     assert client.get("/api/status").json()["next"]["date"] == "2027-02-20"
+
+
+def test_skip_of_an_already_aired_broadcast_is_refused(env):
+    client, _, _ = env
+    res = client.put("/api/overrides", json={"date": "2026-11-20", "slot_id": "morning", "action": "skip"}, headers=HEADERS)
+    assert res.status_code == 409
+
+
+def test_day_off_wins_over_time_change_but_not_over_force(env):
+    # Arrange: 11/23 점심을 12:30으로 옮겨 두고, 그 날을 쉬는 날로
+    client, _, _ = env
+    client.put("/api/overrides", json={"date": "2026-11-23", "slot_id": "lunch", "action": "change", "time": "12:30"}, headers=HEADERS)
+    client.post("/api/days-off", json={"start": "2026-11-23", "end": "2026-11-23"}, headers=HEADERS)
+    cell = lambda: next(r for r in client.get("/api/week?start=2026-11-23").json()["rows"] if r["slot"]["id"] == "lunch")["cells"][0]
+    # Assert: 쉬는 날이 이긴다
+    assert cell()["status"] == "off" and cell()["time"] == "12:30"
+    # Act: 이번만 켜기
+    client.put("/api/overrides", json={"date": "2026-11-23", "slot_id": "lunch", "action": "change", "time": "12:30", "force": True}, headers=HEADERS)
+    assert cell()["status"] in ("scheduled", "next")

@@ -70,7 +70,13 @@ class Scheduler:
         changed = self._prune(now)
         # 앱을 막 켰거나 절전 등으로 확인이 끊겼으면, 그 사이 시각이 된 방송은 미리 볼 수 없었으므로 유예 안이면 내보낸다
         resumed = self._last_tick is None or now - self._last_tick > RESUME_GAP
-        if config.settings.auto_broadcast:
+        if not config.settings.auto_broadcast:
+            # 꺼져 있는 동안 시각이 된 방송은 지나간 것으로 남겨, 1분 안에 다시 켜도 늦게 나가지 않게 한다
+            for occ in occurrences_between(config, now - self._grace, now):
+                if _key(occ) not in self._fired:
+                    self._fired[_key(occ)] = occ.at.isoformat()
+                    changed = True
+        else:
             for occ in occurrences_between(config, now - self._grace, now):
                 key = _key(occ)
                 if key in self._fired:

@@ -158,3 +158,19 @@ def test_resume_after_sleep_fires_within_grace(tmp_path):
     clock.at = datetime(2026, 11, 20, 12, 0, 30)
     sched.tick()
     assert [j.slot_id for j in jobs] == ["lunch"]
+
+
+def test_turning_auto_back_on_within_a_minute_does_not_fire_late(tmp_path):
+    # Arrange: 11:59에 자동 방송을 끄고, 12:00이 지나간 뒤 12:00:30에 다시 켬
+    sched, store, clock, jobs = make(tmp_path, datetime(2026, 11, 20, 11, 59, 0))
+    sched.tick()
+    store.update(lambda c: setattr(c.settings, "auto_broadcast", False))
+    for sec in (1, 2, 3):
+        clock.at = datetime(2026, 11, 20, 12, 0, sec)
+        sched.tick()
+    store.update(lambda c: setattr(c.settings, "auto_broadcast", True))
+    # Act
+    clock.at = datetime(2026, 11, 20, 12, 0, 4)
+    sched.tick()
+    # Assert
+    assert jobs == []

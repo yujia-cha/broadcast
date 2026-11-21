@@ -56,7 +56,7 @@ async function poll() {
     const reconnected = !ctx.connected;
     ctx.status = status;
     ctx.connected = true;
-    document.body.classList.remove("offline");
+    setOffline(false);
     renderChrome(status);
     if (reconnected && ["timetable", "settings"].includes(currentName)) {
       // 끊긴 동안 불러오지 못한 화면을 새로 읽는다(고치던 내용이 있는 화면은 그대로 둔다)
@@ -65,10 +65,18 @@ async function poll() {
     } else current?.onStatus?.(status, prev);
   } catch {
     ctx.connected = false;
-    document.body.classList.add("offline"); // 끊긴 동안은 눌러도 소용없으므로 조작을 막는다
+    setOffline(true); // 끊긴 동안은 눌러도 소용없으므로 조작을 막는다
     renderBanners(ctx.status);
   } finally {
     setTimeout(poll, POLL_MS);
+  }
+}
+
+function setOffline(off) {
+  document.body.classList.toggle("offline", off);
+  for (const el of [document.getElementById("view"), document.querySelector(".top .nav"), document.getElementById("new-btn"),
+    document.getElementById("auto-switch"), ...document.querySelectorAll("dialog[open], .pop")]) {
+    if (el) el.inert = off; // 마우스뿐 아니라 키보드로도 누를 수 없게
   }
 }
 

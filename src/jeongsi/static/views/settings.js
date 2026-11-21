@@ -58,7 +58,7 @@ function checkRow(key, title, defText, desc = "") {
   const saved = h("span", { class: "saved", "aria-live": "polite" });
   const def = defaultNote(key, defText);
   return h("div", { class: "srow" },
-    h("input", { type: "checkbox", id, checked: settings[key], on: { change: async (e) => {
+    h("input", { type: "checkbox", role: "switch", id, checked: settings[key], on: { change: async (e) => {
       if (await save({ [key]: e.target.checked }, saved)) paintDefault(def, settings[key] !== DEFAULTS[key], defText);
     } } }),
     h("label", { for: id }, h("span", null, title), desc ? h("span", { class: "d" }, desc) : null, saved),

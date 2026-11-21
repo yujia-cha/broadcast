@@ -97,6 +97,16 @@ _FIELD_NAMES = {
 }
 
 
+def josa(word: str, pair: str) -> str:
+    """받침에 맞는 조사를 붙인다. pair는 '을/를', '이/가', '은/는'."""
+    with_final, without_final = pair.split("/")
+    last = word.strip().rstrip("'\")] ")[-1:] or " "
+    code = ord(last) - 0xAC00
+    if not 0 <= code <= 11171:
+        return f"{word}{without_final}"
+    return f"{word}{with_final if code % 28 else without_final}"
+
+
 def _korean_error(err: dict) -> str:
     kind, ctx = err.get("type", ""), err.get("ctx") or {}
     fields = [str(p) for p in err.get("loc", ()) if isinstance(p, str) and p not in ("body",)]
@@ -104,20 +114,20 @@ def _korean_error(err: dict) -> str:
     if kind == "value_error":
         return str(ctx.get("error", err.get("msg", "")))
     if kind in ("greater_than_equal", "greater_than"):
-        return f"{label}은(는) {ctx.get('ge', ctx.get('gt'))} 이상이어야 합니다."
+        return f"{josa(label, '은/는')} {ctx.get('ge', ctx.get('gt'))} 이상이어야 합니다."
     if kind in ("less_than_equal", "less_than"):
-        return f"{label}은(는) {ctx.get('le', ctx.get('lt'))} 이하여야 합니다."
+        return f"{josa(label, '은/는')} {ctx.get('le', ctx.get('lt'))} 이하여야 합니다."
     if kind == "string_too_long":
-        return f"{label}은(는) {ctx.get('max_length')}자 이하로 입력하세요."
+        return f"{josa(label, '은/는')} {ctx.get('max_length')}자 이하로 입력하세요."
     if kind in ("string_too_short", "too_short"):
-        return f"{label}을(를) 입력하세요."
+        return f"{josa(label, '을/를')} 입력하세요."
     if kind == "too_long":
-        return f"{label}이(가) 너무 많습니다."
+        return f"{josa(label, '이/가')} 너무 많습니다."
     if kind == "missing":
-        return f"{label}을(를) 입력하세요."
+        return f"{josa(label, '을/를')} 입력하세요."
     if kind == "extra_forbidden":
         return f"알 수 없는 항목입니다: {label}"
-    return f"{label}이(가) 올바르지 않습니다."
+    return f"{josa(label, '이/가')} 올바르지 않습니다."
 
 
 def _validation_response(exc: ValidationError) -> JSONResponse:
@@ -392,16 +402,15 @@ def create_app(services: Services) -> FastAPI:
         now = s.now()
         current = next((o for o in resolve_day(cfg(), override.date) if o.slot_id == override.slot_id), None)
         if current is not None and current.at <= now and not current.skipped:
-            raise _bad(409, "이미 지난 방송은 바꿀 수 없습니다.")
-        if override.time and datetime.combine(override.date, parse_hhmm(override.time)) <= now:
+            raise _bad(409, "이미 지난 방송은 바꾸거나 끌 수 없습니다.")
+        if override.action == "change" and override.time and datetime.combine(override.date, parse_hhmm(override.time)) <= now:
             raise _bad(422, "이미 지난 시각입니다. 지금 이후 시각을 고르세요.")
 
     @app.put("/api/overrides")
     def put_override(body: dict = Body(...)):
         body.pop("id", None)
         override = Override.model_validate(body)
-        if override.action == "change":
-            _check_change_not_past(override)
+        _check_change_not_past(override)
 
         def mutate(c: Config):
             c.overrides = [o for o in c.overrides if not (o.date == override.date and o.slot_id == override.slot_id)]
@@ -636,7 +645,7 @@ def _index(items: list, item_id: str, label: str) -> int:
     for i, item in enumerate(items):
         if item.id == item_id:
             return i
-    raise _bad(404, f"{label}을(를) 찾을 수 없습니다.")
+    raise _bad(404, f"{josa(label, '을/를')} 찾을 수 없습니다.")
 
 
 def _is_korean(voice: Voice) -> bool:
