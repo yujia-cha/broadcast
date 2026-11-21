@@ -1,6 +1,6 @@
 // 설정 화면: 모든 항목에 기본값, 바꾸면 바로 저장
 import { api, get, patch, post } from "../api.js";
-import { confirmDialog, h, toast, toastError } from "../ui.js";
+import { confirmDialog, h, icon, toast, toastError } from "../ui.js";
 
 const DEFAULTS = {
   autostart: true, close_to_tray: true, open_window_on_autostart: false,
@@ -106,7 +106,11 @@ function render() {
           h("label", { for: "set-set_volume" }, h("span", null, "방송할 때 음량 맞추기")),
           h("div", { class: "range" },
             volSlider,
-            volValue, volSaved,
+            volValue,
+            h("button", { class: "btn sm", "aria-label": "이 음량으로 들어 보기", on: { click: () =>
+              post("/api/preview", { kind: "tts", text: "방송 음량 시험입니다.", test_volume: Number(volSlider.value) })
+                .then(() => toast("이 음량으로 들려줍니다.")).catch(toastError) } }, icon("play"), "들어 보기"),
+            volSaved,
           ),
           h("span", { class: "d" }, "방송이 끝나면 원래 음량으로 돌아갑니다."),
         ),
@@ -213,11 +217,17 @@ function importButton() {
       const data = JSON.parse(await file.text());
       const ok = await confirmDialog({ title: "설정 가져오기", message: "지금의 방송 구성·시간표·설정을 파일 내용으로 바꿉니다.", confirm: "가져오기", danger: true });
       if (!ok) return;
-      await api("POST", "/api/import", data);
+      const res = await api("POST", "/api/import", data);
       await ctx.loadPrograms();
       settings = await get("/api/settings");
       render();
-      toast("설정을 가져왔습니다.");
+      const missing = res?.missing_files || [];
+      if (missing.length) {
+        // 소리 파일은 설정 파일에 들어 있지 않다: 이전 PC의 media 폴더를 옮겨야 그 방송이 나간다
+        toast(`가져왔지만 소리 파일 ${missing.length}개가 없습니다. 이전 PC의 media 폴더를 데이터 폴더로 복사하세요.`, {
+          error: true, action: { label: "데이터 폴더 열기", fn: () => post("/api/open-data-folder").catch(toastError) },
+        });
+      } else toast("설정을 가져왔습니다.");
     } catch (err) {
       toastError(err instanceof SyntaxError ? new Error("설정 파일 형식이 아닙니다.") : err);
     } finally {

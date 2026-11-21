@@ -137,7 +137,7 @@ function render(focus = false) {
   const field = confirming ? ticket(st.draft, true) : cur.render(st.draft); // 칸이 기본값을 정할 수 있어 먼저 그린다
 
   const primary = confirming
-    ? h("button", { class: `btn pri wz-cta${st.draft.agreed ? "" : " soft"}`, disabled: st.busy || !canCreate(st.draft), on: { click: create } }, st.busy ? "만드는 중…" : "만들기")
+    ? h("button", { class: "btn pri wz-cta", disabled: st.busy || !canCreate(st.draft), on: { click: create } }, st.busy ? "만드는 중…" : "만들기")
     : h("button", { class: "btn pri wz-cta", id: "wz-next", disabled: !cur.valid(st.draft), on: { click: next } }, "다음");
 
   const answered = confirming ? [] : steps

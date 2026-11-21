@@ -305,3 +305,19 @@ def test_manual_broadcast_is_refused_while_another_is_queued(tmp_path):
                 runner.enqueue(job(kind="manual"))
     finally:
         runner.shutdown()
+
+
+def test_preview_with_test_volume_sets_and_restores_only_volume(tmp_path):
+    # Arrange
+    runner, backend, _ = make_runner(tmp_path)
+    runner.start()
+    try:
+        # Act
+        runner.enqueue(Job(kind="preview", name="음량 시험", program=program(), test_volume=40))
+        assert wait_until(lambda: runner.last_result is not None)
+    finally:
+        runner.shutdown()
+    # Assert: 일시정지·음소거 없이 음량만 바꿨다가 되돌린다
+    calls = backend.media.calls + backend.muter.calls
+    assert ("pause",) not in calls
+    assert backend.volume.calls == [("volume", 0.4, False), ("volume", 0.3, True)]  # 40%로 → 원래(30%, 음소거)로

@@ -460,13 +460,16 @@ def create_app(services: Services) -> FastAPI:
     @app.post("/api/preview", status_code=202)
     def preview(body: dict = Body(...)):
         """단계 하나({kind, ...}) 또는 방송 구성 전체({name, steps})를 다른 소리 처리 없이 들려준다."""
+        test_volume = body.pop("test_volume", None)
+        if test_volume is not None and (not isinstance(test_volume, int) or isinstance(test_volume, bool) or not 0 <= test_volume <= 100):
+            raise _bad(422, "음량은 0~100 사이 숫자여야 합니다.")
         if "steps" in body:
             program = Program.model_validate({"name": str(body.get("name") or "").strip() or "미리듣기", "steps": body["steps"]})
         else:
             program = Program(name="미리듣기", steps=[Step.model_validate({**body, "repeat": 1, "gap_sec": 0})])
         _check_files_exist(program)
         try:
-            s.runner.enqueue(Job(kind="preview", name="미리듣기", program=program))
+            s.runner.enqueue(Job(kind="preview", name="미리듣기", program=program, test_volume=test_volume))
         except RunnerBusy as exc:
             raise _bad(409, str(exc)) from exc
         return {"ok": True}

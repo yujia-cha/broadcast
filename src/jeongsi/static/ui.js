@@ -5,6 +5,7 @@ const PROPS = new Set(["value", "checked", "disabled", "hidden", "selected", "re
 /** h("button", { class: "btn", on: { click } }, "저장") */
 export function h(tag, props, ...children) {
   const el = document.createElement(tag);
+  if (tag === "button") el.type = "button"; // 폼 안의 부품 버튼이 저장(submit)을 일으키지 않게. 필요하면 type으로 바꾼다
   for (const [key, value] of Object.entries(props || {})) {
     if (value === undefined || value === null || value === false && !PROPS.has(key)) continue;
     if (key === "class") el.className = value;
@@ -91,6 +92,8 @@ export function toastError(err) {
 export function openDialog(label, build) {
   const dialog = h("dialog", { "aria-label": label });
   const close = (value) => {
+    const toastEl = dialog.querySelector("#toast"); // 대화상자 위에 띄웠던 알림은 지우지 않고 본문으로 돌려놓는다
+    if (toastEl) document.body.append(toastEl);
     if (dialog.open) dialog.close();
     dialog.remove();
     resolver?.(value);

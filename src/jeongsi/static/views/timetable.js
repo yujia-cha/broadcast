@@ -16,7 +16,7 @@ const BLOCK_PX = 46;
 const blockPx = () => Math.max(26, Math.min(BLOCK_PX, st.hourPx - 4)); // 간격이 좁으면 블록도 낮춘다
 
 let ctx, root, mainEl, nowEl;
-const st = { start: null, week: null, lastSkip: null, weekKey: "", loadToken: 0, dragging: false, hourPx: 56 };
+const st = { start: null, followHome: true, week: null, lastSkip: null, weekKey: "", loadToken: 0, dragging: false, hourPx: 56, openCell: null };
 let resizeTimer;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
@@ -60,7 +60,8 @@ function weekKey(status) {
 async function loadWeek() {
   const token = ++st.loadToken;
   try {
-    const week = await get(`/api/week${st.start ? `?start=${st.start}` : ""}`);
+    // 다른 주로 넘기지 않았으면 늘 '처음 보여 줄 주'를 따른다(자정이 지나 주가 바뀌어도 따라감)
+    const week = await get(`/api/week${!st.followHome && st.start ? `?start=${st.start}` : ""}`);
     if (token !== st.loadToken || !root || st.dragging) return;
     st.week = week;
     st.start = week.start;
@@ -71,10 +72,23 @@ async function loadWeek() {
     ctx.weekSlots = week.rows.map((r) => r.slot);
     renderGrid();
     renderNow();
+    closeStalePopover();
   } catch (err) {
     if (!root) return;
     mainEl.replaceChildren(h("div", { class: "card empty" }, h("h3", null, "시간표를 불러오지 못했습니다"), h("p", null, err.message),
       h("button", { class: "btn", on: { click: loadWeek } }, "다시 시도")));
+  }
+}
+
+// 열어 둔 블록 팝오버가 가리키는 회차의 상태가 바뀌었으면(예: 그 사이 방송이 나감) 닫는다
+function closeStalePopover() {
+  const o = st.openCell;
+  if (!o || !document.querySelector(".pop")) return;
+  const row = st.week?.rows.find((r) => r.slot.id === o.slotId);
+  const cell = row?.cells.find((c) => c.date === o.date);
+  if (!cell || cell.status !== o.status || cell.time !== o.time) {
+    closePopover();
+    st.openCell = null;
   }
 }
 
@@ -104,7 +118,7 @@ function renderGrid() {
     h("button", { class: "ibtn", "aria-label": "지난주", on: { click: () => changeWeek(-7) } }, icon("left")),
     h("button", { class: "ibtn", "aria-label": "다음 주", on: { click: () => changeWeek(7) } }, icon("right")),
     h("h2", null, fmtWeekTitle(w.days[0].date, w.days.at(-1).date)),
-    isThisWeek ? null : h("button", { class: "btn sm", on: { click: () => { st.start = null; loadWeek(); } } }, "이번 주"),
+    isThisWeek ? null : h("button", { class: "btn sm", on: { click: () => { st.start = null; st.followHome = true; loadWeek(); } } }, "이번 주"),
     h("span", { class: "grow" }),
     w.rows.length ? legend() : null,
     h("button", { class: "btn sm ghost", on: { click: () => openDaysOffDialog() } }, icon("calendarOff"), "쉬는 날"),
@@ -296,6 +310,7 @@ function blockPopover(anchor, row, cell) {
         iconAction("edit", "방송 편집", () => { closePopover(); openSlotDialog(row.slot); }),
       )));
   }
+  st.openCell = { slotId: row.slot.id, date: cell.date, status: cell.status, time: cell.time };
   const past = ["past", "live"].includes(cell.status);
   const offByOverride = cell.status === "off" && cell.override?.action === "skip";
   const offByDay = cell.status === "off" && !cell.override;
@@ -303,10 +318,14 @@ function blockPopover(anchor, row, cell) {
   const actions = [];
   if (program) actions.push(iconAction("play", "지금", () => broadcastNow(program.id, row.slot.name)));
   if (!past) {
-    if (offByOverride) actions.push(iconAction("undo", "되살리기", () => clearOverride(row, cell, "다시 방송합니다.")));
+    if (offByOverride) actions.push(iconAction("undo", "되살리기", () => revive(row, cell)));
     else if (offByDay) actions.push(iconAction("check", "이번만 켜기", () => setOverride(row, cell, { action: "change", time: cell.time }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name}만 방송합니다.`)));
-    else actions.push(iconAction("ban", "이번만 끄기", () => setOverride(row, cell, { action: "skip" }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name} 끔`, true)));
-    if (!offByOverride) actions.push(iconAction("clock", "이 날만 시각", () => timeEditor(anchor, row, cell)));
+    else {
+      // 끄기 전에 바꿔 둔 시각·구성(또는 쉬는 날 '이번만 켜기')을 함께 남겨 '되살리기'로 그대로 돌아오게 한다
+      const keep = cell.override?.action === "change" ? { time: cell.time, program_id: cell.program_id } : {};
+      actions.push(iconAction("ban", "이번만 끄기", () => setOverride(row, cell, { action: "skip", ...keep }, `${fmtDate(cell.date)} ${cell.time} ${row.slot.name} 끔`, true)));
+    }
+    if (!offByOverride && !offByDay) actions.push(iconAction("clock", "이 날만 시각", () => timeEditor(anchor, row, cell)));
     if (cell.changed) actions.push(iconAction("undo", "원래대로", () => clearOverride(row, cell, "원래대로 돌렸습니다.")));
   }
   actions.push(iconAction("edit", "방송 편집", () => { closePopover(); openSlotDialog(row.slot); }));
@@ -359,6 +378,22 @@ async function setEnabled(slot, enabled) {
   }
 }
 
+// 되살리기: 끄기 전 상태로. 바꿔 둔 시각이 있으면 그 시각으로, 쉬는 날이면 '이번만 켜기'로 돌아간다
+async function revive(row, cell) {
+  const ov = cell.override || {};
+  const dayOff = st.week?.days.find((d) => d.date === cell.date)?.day_off;
+  try {
+    if (ov.time || ov.program_id || dayOff) {
+      await put("/api/overrides", { date: cell.date, slot_id: row.slot.id, action: "change", time: ov.time || cell.original_time, program_id: ov.program_id || null });
+    } else {
+      await del(`/api/overrides/${cell.date}/${row.slot.id}`);
+    }
+    await refresh(`${fmtDate(cell.date)} ${ov.time || cell.original_time} ${row.slot.name} 다시 방송합니다.`);
+  } catch (err) {
+    toastError(err);
+  }
+}
+
 async function clearOverride(row, cell, message) {
   try {
     await del(`/api/overrides/${cell.date}/${row.slot.id}`);
@@ -399,6 +434,7 @@ function dayPopover(anchor, day) {
 
 function changeWeek(days) {
   st.start = addDays(st.week.start, days);
+  st.followHome = st.start === st.week.home;
   loadWeek();
 }
 
@@ -538,7 +574,11 @@ async function undoSkip() {
 export function openSlotDialog(slot) {
   const draft = { ...slot, weekdays: [...slot.weekdays], dates: [...(slot.dates || [])] };
   let mode = draft.dates.length ? "dates" : "weekly";
-  let nameEl, progEl, errEl, enabledEl, confirmBox, whenBox, modeBox;
+  let nameEl, progEl, errEl, enabledEl, confirmBox, whenBox, modeBox, stripBox;
+  const paintStrip = () => {
+    const program = ctx.programs.find((p) => p.id === progEl.value);
+    stripBox.replaceChildren(strip(program?.steps || [], { size: "sm" }));
+  };
   let periodOpen = false;
   let overlapConfirmed = null;
   const paintWhen = () => {
@@ -588,14 +628,24 @@ export function openSlotDialog(slot) {
 
   const { close } = openDialog("방송 편집", (close) =>
     h("form", { class: "dlg", on: { submit: (e) => { e.preventDefault(); save(); } } },
-      (nameEl = h("input", { class: "input pg-name", value: draft.name, maxlength: 40, "aria-label": "이름", required: true })),
-      timePicker(draft.time, (v) => (draft.time = v)),
-      (modeBox = h("div", { class: "mode-seg", role: "group", "aria-label": "반복" })),
-      (whenBox = h("div")),
-      h("label", { class: "field" }, h("span", null, "방송 구성"),
-        (progEl = h("select", { class: "input" }, ctx.programs.map((p) => h("option", { value: p.id, selected: p.id === draft.program_id }, p.name))))),
-      h("label", { style: { display: "flex", gap: "var(--s2)", alignItems: "center" } },
-        (enabledEl = h("input", { type: "checkbox", checked: draft.enabled, style: { width: "22px", height: "22px", accentColor: "var(--accent)" } })), "사용"),
+      h("div", { class: "dlg-head" },
+        h("h2", null, "방송 편집"),
+        h("label", { class: "toggle-row" }, h("span", null, "켜짐"),
+          (enabledEl = h("input", { type: "checkbox", role: "switch", class: "toggle", checked: draft.enabled, "aria-label": "이 방송 켜짐" }))),
+      ),
+      h("label", { class: "field" }, h("span", null, "이름"),
+        (nameEl = h("input", { class: "input pg-name", value: draft.name, maxlength: 40, required: true }))),
+      h("div", { class: "field" }, h("span", null, "시각"), timePicker(draft.time, (v) => (draft.time = v))),
+      h("div", { class: "field" }, h("span", { id: "dlg-repeat" }, "반복"),
+        (modeBox = h("div", { class: "mode-seg", role: "group", "aria-labelledby": "dlg-repeat" })),
+        (whenBox = h("div"))),
+      h("div", { class: "field" }, h("span", null, "내용"),
+        h("div", { class: "content-row" },
+          (stripBox = h("span")),
+          (progEl = h("select", { class: "input", "aria-label": "방송 내용", on: { change: paintStrip } },
+            ctx.programs.map((p) => h("option", { value: p.id, selected: p.id === draft.program_id }, p.name)))),
+          h("button", { type: "button", class: "btn sm", on: { click: () => { close(); ctx.selectProgramId = progEl.value; ctx.go("programs"); } } }, icon("edit"), "내용 바꾸기"),
+        )),
       (errEl = h("p", { class: "err", role: "alert" })),
       (confirmBox = h("div", { hidden: true })),
       h("div", { class: "dlg-foot" },
@@ -606,6 +656,7 @@ export function openSlotDialog(slot) {
       ),
     ));
   paintWhen();
+  paintStrip();
 
   async function save() {
     errEl.textContent = "";
@@ -646,10 +697,10 @@ export function openSlotDialog(slot) {
   function askDelete() {
     confirmBox.hidden = false;
     confirmBox.replaceChildren(h("div", { class: "confirm-row" },
-      h("span", { class: "grow" }, "이 방송을 지웁니다."),
+      h("span", { class: "grow" }, "이 방송을 지웁니다. 다른 방송이 쓰지 않는 내용도 함께 지워집니다."),
       h("button", { type: "button", class: "btn sm", on: { click: () => (confirmBox.hidden = true) } }, "취소"),
       h("button", { type: "button", class: "btn sm stop", on: { click: async () => {
-        try { await del(`/api/slots/${slot.id}`); close(); await refresh("지웠습니다."); } catch (err) { errEl.textContent = err.message; }
+        try { await del(`/api/slots/${slot.id}?with_program=true`); close(); await ctx.loadPrograms(); await refresh("지웠습니다."); } catch (err) { errEl.textContent = err.message; }
       } } }, "지우기")));
   }
 }

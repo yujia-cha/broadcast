@@ -66,6 +66,8 @@ class DesktopShell:
             os._exit(0)
 
     # 동작 ------------------------------------------------------------------
+    _told_tray = False
+
     def quit(self) -> None:
         self.quitting = True
         if self.icon is not None:
@@ -82,11 +84,28 @@ class DesktopShell:
         settings = self.application.services.store.config.settings
         if settings.close_to_tray:
             self.window.hide()
+            self._tell_once_in_tray()
+            return False
+        if not confirm_quit():
             return False
         self.quitting = True
         if self.icon is not None:
             self.icon.stop()
         return True
+
+    def _tell_once_in_tray(self) -> None:
+        """처음 트레이로 숨길 때 한 번만, 꺼진 게 아니라 계속 돌고 있다고 알린다."""
+        if self._told_tray or self.icon is None:
+            return
+        self._told_tray = True
+        try:
+            self.icon.notify("창을 닫아도 트레이에서 계속 실행되며 예약 방송을 내보냅니다.", APP_NAME)
+        except Exception:  # 알림을 지원하지 않는 환경
+            log.debug("트레이 알림 실패", exc_info=True)
+
+    def quit_from_tray(self) -> None:
+        if confirm_quit():
+            self.quit()
 
     def start_tray(self) -> None:
         import pystray
@@ -113,10 +132,10 @@ class DesktopShell:
         menu = pystray.Menu(
             pystray.MenuItem("열기", lambda: self.show_window(), default=True),
             pystray.MenuItem("새 버전 설치…", open_update, visible=has_update),
-            pystray.MenuItem("방송 끄기", lambda: services.runner.stop_current(), enabled=on_air),
+            pystray.MenuItem("지금 방송 정지", lambda: services.runner.stop_current(), enabled=on_air),
             pystray.MenuItem("자동 방송", toggle_auto, checked=auto_on),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("종료", lambda: self.quit()),
+            pystray.MenuItem("종료", lambda: self.quit_from_tray()),
         )
         self.icon = pystray.Icon("JeongsiBroadcast", app_icon(TEAL), APP_NAME, menu)
         self.icon.run_detached()
@@ -188,3 +207,20 @@ def run_desktop(args, data_dir: Path) -> int:
         log.info("정리를 마치고 프로세스를 끝냅니다(pid %s)", os.getpid())
         logging.shutdown()
         os._exit(0)
+
+
+def confirm_quit() -> bool:
+    """종료하면 예약 방송이 나가지 않으므로 한 번 묻는다(Windows 메시지 상자). 묻지 못하면 그대로 끈다."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+
+        MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2, IDYES = 0x4, 0x30, 0x100, 6
+        answer = ctypes.windll.user32.MessageBoxW(
+            None, "정시 방송을 끄면 예약한 방송이 나가지 않습니다.\n그래도 끌까요?", APP_NAME, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+        )
+        return answer == IDYES
+    except Exception:
+        log.exception("종료 확인 창을 띄우지 못했습니다")
+        return True

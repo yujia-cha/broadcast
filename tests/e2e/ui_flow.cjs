@@ -170,7 +170,7 @@ async function main() {
     });
 
     await step("쉬는 날: 달력에서 기간 골라 추가 → 삭제", async () => {
-      await page.click(".weekbar >> text=쉬는 날");
+      await page.click(".weekbar button:has-text(\"쉬는 날\")");
       if (!(await page.locator("dialog >> button:has-text('추가')").isDisabled())) throw new Error("날을 고르기 전인데 추가가 눌립니다");
       await page.click('dialog button[aria-label="다음 달"]');
       const days = page.locator("dialog .rc-day:not([disabled])");
@@ -234,6 +234,7 @@ async function main() {
     await step("지금 방송 → 넘기기 → 정지", async () => {
       await page.click(".nav >> text=시간표");
       await page.click(".rail .ia >> text=지금");
+      await page.click("dialog >> button:has-text('지금 방송')"); // 스피커로 바로 나가므로 한 번 묻는다
       await page.waitForSelector(".card.liveC");
       await page.waitForSelector("#livepill:not([hidden])");
       await page.click(".liveC .ia >> text=넘기기");
@@ -324,6 +325,64 @@ async function main() {
       await a.click();
       await page.waitForSelector(".pop >> text=겹침 가");
       await page.keyboard.press("Escape");
+    });
+
+    await step("블록에서 Enter 두 번: 바로 방송되지 않음", async () => {
+      const blk = page.locator('.cal-col.today .cblock[aria-label*="점심 방송"]');
+      await blk.scrollIntoViewIfNeeded();
+      await blk.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForSelector(".pop");
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(300);
+      if (await page.locator("dialog[open]").count()) throw new Error("Enter 두 번에 확인 창이 떴습니다");
+      if (await page.locator(".card.liveC").count()) throw new Error("Enter 두 번에 방송이 나갔습니다");
+      await page.keyboard.press("Escape");
+    });
+
+    await step("바꾼 시각에서 이번만 끄기 → 되살리기는 바꾼 시각으로", async () => {
+      const blk = page.locator('.cal-col.today .cblock[aria-label*="점심 방송"]');
+      await blk.click();
+      await page.click(".pop .ia >> text=이 날만 시각");
+      await page.fill(".pop .tp-time", "2340");
+      await page.keyboard.press("Enter");
+      await page.waitForSelector('.cal-col.today .cblock.chg >> text=23:40');
+      await page.waitForFunction(() => !document.querySelector("#toast.show"), null, { timeout: 10000 });
+      await page.click('.cal-col.today .cblock.chg[aria-label*="점심 방송"]');
+      await page.click(".pop .ia >> text=이번만 끄기");
+      await page.waitForSelector('.cal-col.today .cblock.off[aria-label*="점심 방송"]');
+      await page.click('.cal-col.today .cblock.off[aria-label*="점심 방송"]');
+      await page.click(".pop .ia >> text=되살리기");
+      await page.waitForSelector('.cal-col.today .cblock.chg >> text=23:40');
+      await page.click('.cal-col.today .cblock.chg[aria-label*="점심 방송"]');
+      await page.click(".pop .ia >> text=원래대로");
+      await page.waitForSelector('.cal-col.today .cblock >> text=23:55');
+    });
+
+    await step("방송 끄기(켜짐 해제) → 흐리게 남음 → 다시 켜기", async () => {
+      await page.click('.cal-col.today .cblock[aria-label*="점심 방송"]');
+      await page.click(".pop .ia >> text=방송 편집");
+      await page.uncheck('dialog input.toggle');
+      await page.click("dialog >> button:has-text('저장')");
+      await page.waitForSelector('.cal-col.today .cblock.disabled[aria-label*="점심 방송"]');
+      await shot("12-disabled-block");
+      await page.click('.cal-col.today .cblock.disabled[aria-label*="점심 방송"]');
+      await page.click(".pop .ia >> text=다시 켜기");
+      await page.waitForSelector('.cal-col.today .cblock.scheduled[aria-label*="점심 방송"]');
+    });
+
+    await step("방송 편집에서 이름만 고쳐도 분 단위 시각 유지", async () => {
+      await page.evaluate(() => fetch("/api/broadcasts", {
+        method: "POST", headers: { "Content-Type": "application/json", "X-Jeongsi-Client": "1" },
+        body: JSON.stringify({ name: "분 단위", steps: [{ kind: "tts", text: "안내" }], time: "23:58", weekdays: [0, 1, 2, 3, 4, 5, 6] }),
+      }));
+      await page.click(".nav >> text=방송 구성");
+      await page.click(".nav >> text=시간표");
+      await page.click('.cal-col.today .cblock[aria-label*="분 단위"]');
+      await page.click(".pop .ia >> text=방송 편집");
+      await page.fill("dialog .pg-name", "분 단위 안내");
+      await page.click("dialog >> button:has-text('저장')");
+      await page.waitForSelector('.cal-col.today .cblock[aria-label*="분 단위 안내"] >> text=23:58');
     });
 
     if (errors.length) throw new Error(`콘솔 오류: ${errors.join(" | ")}`);

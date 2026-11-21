@@ -564,3 +564,45 @@ p.err { display: flex; align-items: center; gap: var(--s2); font-size: 13px; }
 /* 대화상자: 내용이 길어도 저장·취소 줄은 아래에 붙어 있게 */
 dialog { max-height: calc(100vh - 32px); overflow: auto; }
 dialog .dlg-foot { position: sticky; bottom: 0; background: var(--surface); padding-block: var(--s3); margin-bottom: calc(-1 * var(--s3)); z-index: 2; }
+/* 4차 점검 */
+body.offline main.view, body.offline .top .nav, body.offline #new-btn, body.offline #auto-switch { pointer-events: none; opacity: .5; }
+.auto label { cursor: pointer; }
+.toast { top: calc(56px + var(--s3)); bottom: auto; transform: translate(-50%, -8px); } /* 아래 '다음'·'만들기' 버튼을 덮지 않게 */
+.toast.show { transform: translate(-50%, 0); }
+.cal-now { pointer-events: none; }
+.tt-page > .rail { order: 2; } .tt-page > .cal-wrap { order: 1; }
+@media (max-width: 1100px) { .tt-page > .rail { order: 0; } }
+.cblock.disabled { background: var(--surface); border-style: dashed; border-color: var(--line-strong); box-shadow: none; opacity: .75; }
+.cblock.disabled .cb-time { text-decoration: line-through; color: var(--muted); }
+.cal-day-memo { font-size: 11px; color: var(--text-2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend { display: inline-flex; flex-wrap: wrap; gap: var(--s3); font-size: 12px; color: var(--text-2); }
+.lg-item { display: inline-flex; align-items: center; gap: 4px; }
+.lg-sw { width: 14px; height: 10px; border-radius: 3px; border: 1.5px solid var(--line-strong); background: var(--surface); }
+.lg-sw.next { background: var(--accent); border-color: var(--accent); }
+.lg-sw.chg { border-style: dashed; border-color: var(--accent); }
+.lg-sw.off { background: repeating-linear-gradient(135deg, var(--hatch) 0 1px, var(--surface) 1px 4px); }
+.lg-sw.disabled { border-style: dashed; opacity: .75; }
+@media (max-width: 1100px) { .legend { display: none; } }
+.dlg-head { display: flex; align-items: center; gap: var(--s3); }
+.dlg-head h2 { flex: 1; margin: 0; }
+.toggle-row { display: inline-flex; align-items: center; gap: var(--s2); font-weight: 500; cursor: pointer; }
+input.toggle { appearance: none; -webkit-appearance: none; position: relative; width: 44px; height: 26px; border-radius: 13px; background: var(--input); margin: 0; cursor: pointer; transition: background var(--t-mid) var(--ease-out); flex: none; }
+input.toggle::after { content: ""; position: absolute; left: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); transition: transform var(--t-mid) var(--ease-out); }
+input.toggle:checked { background: var(--accent); }
+input.toggle:checked::after { transform: translateX(18px); }
+input.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.content-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.content-row select { flex: 1; min-width: 160px; }
+.switch { height: 32px; width: 52px; border-radius: 16px; }
+.switch::after { width: 26px; height: 26px; }
+.switch[aria-checked="true"]::after { transform: translateX(20px); }
+.foot-err { flex-basis: 100%; order: -1; }
+.ia.danger .ia-i { color: var(--danger); }
+.sp-label { font-size: 13px; font-weight: 600; color: var(--text-2); }
+/* 설정의 켜고 끄는 항목은 위쪽 '자동 방송'·Windows 설정처럼 토글 모양 */
+.srow input[type="checkbox"] { appearance: none; -webkit-appearance: none; position: relative; width: 44px; height: 26px; border-radius: 13px; background: var(--input); margin: 0; cursor: pointer; transition: background var(--t-mid) var(--ease-out); flex: none; }
+.srow input[type="checkbox"]::after { content: ""; position: absolute; left: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); transition: transform var(--t-mid) var(--ease-out); }
+.srow input[type="checkbox"]:checked { background: var(--accent); }
+.srow input[type="checkbox"]:checked::after { transform: translateX(18px); }
+.srow input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.srow { grid-template-columns: 52px minmax(0, 1fr) auto; }

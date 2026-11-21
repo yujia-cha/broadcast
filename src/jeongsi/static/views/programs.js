@@ -17,6 +17,7 @@ export function mount(el, appCtx) {
   listEl = h("nav", { class: "plist", "aria-label": "방송 구성 목록" });
   editorEl = h("section", { class: "editor", "aria-label": "방송 구성 편집" });
   el.replaceChildren(h("div", { class: "pg-page" }, listEl, editorEl));
+  if (ctx.selectProgramId) { st.selectedId = ctx.selectProgramId; ctx.selectProgramId = null; } // 방송 편집의 '내용 바꾸기'에서 옴
   Promise.all([ctx.loadPrograms(), ctx.loadMedia()]).then(() => {
     if (!root) return;
     startEdit(ctx.programs.find((p) => p.id === st.selectedId) || ctx.programs[0] || null);
@@ -98,12 +99,13 @@ function renderEditor() {
     }),
     blockTrack(d),
     stepPanel(d.steps[st.sel], st.sel),
-    st.errorMessage ? h("p", { class: "err", role: "alert" }, st.errorMessage) : null,
     h("div", { class: "editor-foot" },
+      // 오류는 아래 고정 바 안에 두어 가려지지 않게 한다
+      st.errorMessage ? h("p", { class: "err foot-err", role: "alert" }, icon("alert"), st.errorMessage) : null,
       h("span", { class: "pg-total" }, icon("clock"), fmtDuration(total)),
       h("span", { class: "grow" }),
       iconAction(st.previewing === "all" ? "stop" : "play", st.previewing === "all" ? "정지" : "전체 듣기", () => (st.previewing === "all" ? stopPreview() : previewAll())),
-      d.id ? iconAction("trash", "삭제", () => removeProgram(program)) : null,
+      d.id ? iconAction("trash", "삭제", () => removeProgram(program), { tone: "danger" }) : null,
       h("button", { class: "btn pri", on: { click: save } }, icon("check"), "저장"),
     ),
   ].filter(Boolean));
@@ -164,6 +166,7 @@ function stepPanel(step, i) {
   return h("div", { class: `step-panel edge-${step.kind}` },
     body,
     h("div", { class: "sp-row" },
+      h("span", { class: "sp-label", id: `cnt-${step.id}` }, step.kind === "tts" ? "몇 번 읽기" : "몇 번 틀기"),
       countPicker(step.kind, step.repeat > 5 ? null : step.repeat, (n) => { step.repeat = n; renderEditor(); }),
       step.repeat > 1 ? h("div", { class: "gap-pick", role: "radiogroup", "aria-label": "반복 사이 쉬는 시간" },
         icon("clock"),

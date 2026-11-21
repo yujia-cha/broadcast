@@ -53,12 +53,19 @@ async function poll() {
   try {
     const status = await get("/api/status");
     const prev = ctx.status;
+    const reconnected = !ctx.connected;
     ctx.status = status;
     ctx.connected = true;
+    document.body.classList.remove("offline");
     renderChrome(status);
-    current?.onStatus?.(status, prev);
+    if (reconnected && ["timetable", "settings"].includes(currentName)) {
+      // 끊긴 동안 불러오지 못한 화면을 새로 읽는다(고치던 내용이 있는 화면은 그대로 둔다)
+      current.unmount?.();
+      current.mount(document.getElementById("view"), ctx);
+    } else current?.onStatus?.(status, prev);
   } catch {
     ctx.connected = false;
+    document.body.classList.add("offline"); // 끊긴 동안은 눌러도 소용없으므로 조작을 막는다
     renderBanners(ctx.status);
   } finally {
     setTimeout(poll, POLL_MS);
@@ -96,7 +103,7 @@ function renderBanners(status) {
   const el = document.getElementById("banners");
   const items = [];
   if (!ctx.connected) {
-    items.push(h("div", { class: "banner error", role: "alert" }, icon("alert"), h("span", { class: "grow" }, "앱과 연결이 끊겼습니다. 다시 연결하는 중입니다.")));
+    items.push(h("div", { class: "banner error", role: "alert" }, icon("alert"), h("span", { class: "grow" }, "정시 방송과 연결이 끊겼습니다. 다시 연결하는 중입니다. 계속되면 정시 방송을 다시 시작하세요.")));
   }
   const last = status?.runner?.last;
   if (last?.result === "failed" && ctx.dismissedFailure !== last.finished_at) {

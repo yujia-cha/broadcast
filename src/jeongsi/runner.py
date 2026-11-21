@@ -42,6 +42,8 @@ class Job:
     date: date | None = None
     # 재생 직전에 아직 유효한지 확인(예약 방송: 쉬기·자동 방송 끄기가 그새 적용됐는지)
     check: Callable[[], bool] | None = field(default=None, compare=False, repr=False)
+    # 미리듣기를 이 음량(0~100)으로 들려준다(설정 화면의 음량 시험). 끝나면 원래 음량으로 돌린다
+    test_volume: int | None = None
 
     @property
     def ducks(self) -> bool:
@@ -261,6 +263,8 @@ class Runner:
         try:
             if job.ducks:
                 self._duck(restore, settings)
+            elif job.test_volume is not None:
+                self._duck(restore, settings.model_copy(update={"pause_media": False, "mute_others": False, "set_volume": True, "volume": job.test_volume}))
             self._set_status(state="playing")
             self._play_units(units, settings)
             if self._stop_requested:
@@ -270,7 +274,7 @@ class Runner:
             result, error = "failed", str(exc)[:200]
         finally:
             self._set_status(state="restoring", play_started=None)
-            if job.ducks:
+            if job.ducks or job.test_volume is not None:
                 self._restore(restore)
             with self._lock:
                 self._status = {"state": "idle"}

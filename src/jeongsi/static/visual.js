@@ -88,7 +88,7 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
       return h("span", { class: "tp-tick", style: { left: `${(i * 60 * 100) / (hi - lo)}%` } }, hour % every === 0 ? String(hour) : "");
     }));
   };
-  const set = (m, done = false, exact = false) => {
+  const set = (m, done = false, exact = false, silent = false) => {
     minutes = Math.min(exact ? 1439 : 1435, Math.max(0, exact ? Math.round(m) : Math.round(m / 5) * 5)); // 직접 입력은 분 단위 그대로
     // 기본 눈금(6~22시) 밖의 시각이면 하루 전체로 넓혀 핀이 거짓 위치에 붙지 않게 한다(끄는 중에는 눈금 고정)
     const [nlo, nhi] = minutes < from || minutes > to || hi - lo === 24 * 60 ? [0, 24 * 60] : [from, to]; // 한 번 넓히면 그대로
@@ -100,7 +100,7 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
     pin.style.left = `${((Math.min(hi, Math.max(lo, minutes)) - lo) * 100) / (hi - lo)}%`;
     pin.setAttribute("aria-valuenow", String(minutes));
     pin.setAttribute("aria-valuetext", hhmm);
-    onChange(hhmm, done);
+    if (!silent) onChange(hhmm, done);
   };
   const fromPointer = (e) => {
     const r = track.getBoundingClientRect();
@@ -130,7 +130,7 @@ export function timePicker(value, onChange, { from = 6 * 60, to = 22 * 60 } = {}
     if (e.key === "Enter") { e.preventDefault(); onChange(toHHMM(minutes), true); }
   });
   const wrap = h("div", { class: "tp" }, display, h("div", { class: "tp-scale" }, track));
-  set(minutes);
+  set(minutes, false, true, true);
   return wrap;
 }
 
